@@ -1,0 +1,36 @@
+# Core requirements for BIFROST
+# Install with: pip install -r requirements.txt
+torch>=2.0.0
+numpy>=1.21.0
+typing-extensions>=4.0.0
+
+# Optional: Materials science libraries
+# Uncomment if you need materials science functionality
+# pymatgen>=2023.1.0
+# matminer>=0.8.0
+# ase>=3.22.0
+# spglib>=2.0.0
+
+# Optional: Advanced processing
+# Uncomment if you need advanced structure processing
+# torch-geometric>=2.3.0
+
+# Optional: Visualization
+# Uncomment if you need plotting capabilities
+# matplotlib>=3.5.0
+# plotly>=5.0.0
+# seaborn>=0.11.0
+
+# Optional: Performance optimization
+# Uncomment if you need performance optimizations
+# numba>=0.56.0
+# cython>=0.29.0
+
+# Development dependencies
+# Uncomment for development
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# isort>=5.12.0
+# flake8>=6.0.0
+# mypy>=1.0.0

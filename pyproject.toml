@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bifrost"
+version = "1.0.0"
+description = "BIFROST: Crystal Structure Generation with Property Conditioning"
+readme = "README_BIFROST.md"
+license = { text = "MIT" }
+authors = [{ name = "BIFROST Team", email = "team@bifrost.org" }]
+maintainers = [{ name = "BIFROST Team", email = "team@bifrost.org" }]
+keywords = [
+    "machine-learning",
+    "materials-science",
+    "crystal-structures",
+    "deep-learning",
+    "transformer",
+    "materials-discovery",
+    "property-prediction",
+    "generative-models",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.8"
+
+# Core dependencies
+dependencies = ["torch>=2.0.0", "numpy>=1.21.0", "typing-extensions>=4.0.0"]
+
+# Optional dependencies for different use cases
+[project.optional-dependencies]
+# Core functionality (always recommended)
+core = ["torch>=2.0.0", "numpy>=1.21.0"]
+
+# Materials science integration
+materials = [
+    "pymatgen>=2023.1.0",
+    "matminer>=0.8.0",
+    "ase>=3.22.0",
+    "spglib>=2.0.0",
+    "pyxtal>=0.6.6",
+]
+
+# Advanced structure processing
+structures = [
+    "pymatgen>=2023.1.0",
+    "ase>=3.22.0",
+    "spglib>=2.0.0",
+    "torch-geometric>=2.3.0",
+    "pyxtal>=0.6.6",
+]
+
+# Data sources and databases
+data = ["pymatgen>=2023.1.0", "matminer>=0.8.0", "requests>=2.28.0"]
+
+# Visualization and plotting
+viz = ["matplotlib>=3.5.0", "plotly>=5.0.0", "seaborn>=0.11.0"]
+
+# Performance and optimization
+performance = ["torch>=2.0.0", "numba>=0.56.0", "cython>=0.29.0"]
+
+# Development and testing
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+
+# Documentation
+docs = [
+    "sphinx>=6.0.0",
+    "sphinx-rtd-theme>=1.2.0",
+    "myst-parser>=0.18.0",
+    "nbsphinx>=0.9.0",
+    "jupyter>=1.0.0",
+]
+
+# Full installation (includes most optional dependencies)
+full = ["bifrost-crystals[core,materials,structures,data,viz,performance]"]
+
+# Everything including development tools
+all = ["bifrost-crystals[full,dev,docs]"]
+
+# Default installation
+[project.urls]
+Homepage = "https://github.com/bifrost-crystals/bifrost"
+Documentation = "https://bifrost-crystals.readthedocs.io/"
+Repository = "https://github.com/bifrost-crystals/bifrost"
+Issues = "https://github.com/bifrost-crystals/bifrost/issues"
+Changelog = "https://github.com/bifrost-crystals/bifrost/blob/main/CHANGELOG.md"
+
+# Package discovery
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bifrost*"]
+exclude = ["tests*", "docs*", "examples*"]
+
+# Entry points
+[project.scripts]
+bifrost-train = "bifrost.train_test:main"
+bifrost-generate = "bifrost.generation_cli:main"
+bifrost-generate-vocab = "bifrost.data.generate_wyckoff_data:main"

@@ -1,0 +1,13 @@
+include README_BIFROST.md
+include LICENSE
+include pyproject.toml
+include setup.py
+recursive-include bifrost *.py
+recursive-include tests *.py
+recursive-include docs *
+exclude __pycache__
+exclude *.pyc
+exclude .git*
+exclude .DS_Store
+global-exclude *.pyc
+global-exclude __pycache__

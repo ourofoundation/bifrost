@@ -1,0 +1,359 @@
+"""
+BIFROST Generator.
+
+High-level interface for generating crystal structures with property conditioning.
+"""
+
+import torch
+import numpy as np
+from typing import Dict, List, Any, Optional, Tuple, Union
+from pathlib import Path
+
+from ..model import BIFROST, create_bifrost_model, get_bifrost_config
+from ..data.tokenizer import tokenizer
+from ..data.properties import discretize_structure_properties, get_property_bins
+from .decoder import StructureDecoder
+
+
+class BIFROSTGenerator:
+    """
+    High-level generator for crystal structures with property conditioning.
+
+    This class provides an easy-to-use interface for generating crystal structures
+    using trained BIFROST models, with support for conditioning on target properties.
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[Union[str, Path]] = None,
+        model_config: str = "small",
+        device: Optional[str] = None,
+    ):
+        """
+        Initialize BIFROST generator.
+
+        Args:
+            model_path: Path to trained model checkpoint (optional)
+            model_config: Model configuration name ('small', 'medium', 'large')
+            device: Device to run generation on ('cpu', 'cuda', 'mps')
+        """
+        # Setup device
+        if device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.backends.mps.is_available():
+                self.device = "mps"
+        else:
+            self.device = device
+
+        print(f"Using device: {self.device}")
+
+        # Create model
+        config = get_bifrost_config(model_config)
+        # Always align vocab size with tokenizer so Wyckoff/lattice vocab matches
+        config["vocab_size"] = tokenizer.get_vocab_size()
+
+        self.model = create_bifrost_model(config)
+        self.model.to(self.device)
+        self.model.eval()
+
+        # Load checkpoint if provided
+        if model_path:
+            self.load_checkpoint(model_path)
+
+        # Create decoder
+        self.decoder = StructureDecoder(tokenizer)
+
+        # Get property information
+        self.property_bins = get_property_bins()
+
+        print(
+            f"✓ BIFROST Generator initialized with {self.model.get_num_parameters():,} parameters"
+        )
+
+    def load_checkpoint(self, checkpoint_path: Union[str, Path]):
+        """
+        Load trained model checkpoint.
+
+        Args:
+            checkpoint_path: Path to model checkpoint
+        """
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        print(f"✓ Loaded checkpoint from {checkpoint_path}")
+
+    def create_property_prefix(
+        self, target_properties: Dict[str, Union[float, str]]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Create property prefix tokens for generation.
+
+        Args:
+            target_properties: Dict of property_name -> value/bin_name
+
+        Returns:
+            Tuple of (prefix_tokens, prefix_types)
+        """
+        # Convert property values to tokens
+        property_tokens = []
+        property_types = []
+
+        for prop_name, value in target_properties.items():
+            if prop_name not in self.property_bins:
+                print(f"Warning: Unknown property '{prop_name}', skipping")
+                continue
+
+            if isinstance(value, str):
+                # Assume it's already a bin name (e.g., "BANDGAP_MED")
+                bin_name = value.replace(f"{prop_name.upper()}_", "").lower()
+                token_name = value
+            else:
+                # Convert numeric value to bin
+                from ..data.properties import property_binner
+
+                bin_name = property_binner.get_property_bin(prop_name, value)
+                token_name = property_binner.get_property_token(prop_name, bin_name)
+
+            # Get token ID
+            token_id = tokenizer.vocab.get(token_name, tokenizer.vocab["UNK"])
+            property_tokens.append(token_id)
+            property_types.append(tokenizer.token_types["PROPERTY"])
+
+        if not property_tokens:
+            raise ValueError("No valid properties specified")
+
+        # Append separator token to indicate end of property prefix
+        sep_id = tokenizer.special_tokens.get("SEP")
+        if sep_id is not None:
+            property_tokens.append(sep_id)
+            property_types.append(
+                tokenizer.token_types["PROPERTY"]
+            )  # treat as discrete
+
+        # Convert to tensors
+        prefix_tokens = torch.tensor(
+            [property_tokens], dtype=torch.long, device=self.device
+        )
+        prefix_types = torch.tensor(
+            [property_types], dtype=torch.long, device=self.device
+        )
+
+        return prefix_tokens, prefix_types
+
+    def generate(
+        self,
+        target_properties: Dict[str, Union[float, str]],
+        max_length: int = 512,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        num_samples: int = 1,
+        batch_size: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate crystal structures with property conditioning.
+
+        Args:
+            target_properties: Target properties to condition generation on
+            max_length: Maximum sequence length for generation
+            temperature: Sampling temperature
+            top_k: Top-k sampling parameter
+            top_p: Top-p (nucleus) sampling parameter
+            num_samples: Number of structures to generate
+            batch_size: Batch size for generation
+
+        Returns:
+            List of generated crystal structures
+        """
+        print("Generating crystal structures...")
+        print(f"Target properties: {target_properties}")
+
+        # Create property prefix
+        prefix_tokens, prefix_types = self.create_property_prefix(target_properties)
+
+        generated_structures = []
+
+        # Generate in batches
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
+            current_batch_size = batch_end - batch_start
+
+            print(f"Generating batch {batch_start + 1}-{batch_end}/{num_samples}")
+
+            # Expand prefix for batch
+            batch_prefix_tokens = prefix_tokens.repeat(current_batch_size, 1)
+            batch_prefix_types = prefix_types.repeat(current_batch_size, 1)
+
+            # Generate token sequences
+            with torch.no_grad():
+                generated_tokens, generated_types = self.model.generate(
+                    batch_prefix_tokens,
+                    batch_prefix_types,
+                    max_length=max_length,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                )
+
+            # Decode each structure in the batch
+            for i in range(current_batch_size):
+                tokens = generated_tokens[i].cpu().numpy()
+                types = generated_types[i].cpu().numpy()
+
+                try:
+                    structure = self.decoder.decode_structure(tokens, types)
+                    if structure:
+                        structure["generated_properties"] = target_properties.copy()
+                        generated_structures.append(structure)
+                except Exception as e:
+                    print(f"Warning: Failed to decode structure: {e}")
+                    continue
+
+        print(f"✓ Generated {len(generated_structures)}/{num_samples} structures")
+        return generated_structures
+
+    def generate_sequences(
+        self,
+        target_properties: Dict[str, Union[float, str]],
+        max_length: int = 512,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        num_samples: int = 1,
+        batch_size: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate raw token/type sequences with property conditioning.
+
+        Returns a list of dicts with keys: 'tokens' (List[float]) and 'types' (List[int]).
+        """
+        print("Generating raw sequences...")
+        print(f"Target properties: {target_properties}")
+
+        prefix_tokens, prefix_types = self.create_property_prefix(target_properties)
+
+        sequences: List[Dict[str, Any]] = []
+
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
+            current_batch_size = batch_end - batch_start
+
+            print(f"Sampling batch {batch_start + 1}-{batch_end}/{num_samples}")
+
+            batch_prefix_tokens = prefix_tokens.repeat(current_batch_size, 1)
+            batch_prefix_types = prefix_types.repeat(current_batch_size, 1)
+
+            with torch.no_grad():
+                generated_tokens, generated_types = self.model.generate(
+                    batch_prefix_tokens,
+                    batch_prefix_types,
+                    max_length=max_length,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                )
+
+            for i in range(current_batch_size):
+                tok = generated_tokens[i].detach().cpu().numpy().tolist()
+                typ = generated_types[i].detach().cpu().numpy().tolist()
+                sequences.append({"tokens": tok, "types": typ})
+
+        print(f"✓ Sampled {len(sequences)} sequences")
+        return sequences
+
+    def decode_tokens(self, tokens: List[float]) -> List[str]:
+        """
+        Convert token ids (possibly floats for continuous) to human-readable strings.
+
+        Discrete ids are mapped using the tokenizer's reverse vocab; continuous
+        values are formatted as floats.
+        """
+        reverse_vocab = {v: k for k, v in tokenizer.vocab.items()}
+        decoded: List[str] = []
+        for val in tokens:
+            try:
+                int_val = int(val)
+                if abs(val - int_val) < 1e-6 and int_val in reverse_vocab:
+                    decoded.append(reverse_vocab[int_val])
+                elif abs(val - int_val) < 1e-6:
+                    decoded.append(str(int_val))
+                else:
+                    decoded.append(f"{float(val):.4f}")
+            except Exception:
+                decoded.append(str(val))
+        return decoded
+
+    def generate_with_property_ranges(
+        self,
+        property_ranges: Dict[str, Tuple[float, float]],
+        num_samples: int = 10,
+        **generation_kwargs,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate structures with properties sampled from ranges.
+
+        Args:
+            property_ranges: Dict of property_name -> (min, max) ranges
+            num_samples: Number of structures to generate
+            **generation_kwargs: Additional generation arguments
+
+        Returns:
+            List of generated structures with sampled properties
+        """
+        print(
+            f"Generating {num_samples} structures with property ranges: {property_ranges}"
+        )
+
+        generated_structures = []
+
+        for i in range(num_samples):
+            # Sample properties from ranges
+            target_properties = {}
+            for prop_name, (min_val, max_val) in property_ranges.items():
+                if prop_name not in self.property_bins:
+                    continue
+
+                value = np.random.uniform(min_val, max_val)
+                target_properties[prop_name] = value
+
+            # Generate structure with these properties
+            structures = self.generate(
+                target_properties, num_samples=1, **generation_kwargs
+            )
+
+            if structures:
+                generated_structures.extend(structures)
+
+        return generated_structures
+
+    def get_available_properties(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about available properties for conditioning."""
+        return self.property_bins.copy()
+
+    def get_property_examples(self) -> Dict[str, List[str]]:
+        """Get example property values for each property type."""
+        examples = {}
+
+        for prop_name, prop_info in self.property_bins.items():
+            examples[prop_name] = {
+                "description": prop_info["description"],
+                "thresholds": prop_info["thresholds"],
+                "example_bins": prop_info["tokens"],
+                "units": self._get_property_units(prop_name),
+            }
+
+        return examples
+
+    def _get_property_units(self, prop_name: str) -> str:
+        """Get units for a property."""
+        units = {
+            "bandgap": "eV",
+            "density": "g/cm³",
+            "ehull": "eV/atom",
+            "bulk_modulus": "GPa",
+            "formation_energy": "eV/atom",
+        }
+        return units.get(prop_name, "unknown")
