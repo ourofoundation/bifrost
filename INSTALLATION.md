@@ -79,8 +79,8 @@ Testing basic functionality...
 
 Testing data processing...
 ✓ Property discretization successful
-  - Original: {'bandgap': 2.5, 'density': 3.0, 'ehull': 0.02, 'formation_energy': -2.5}
-  - Discretized: {'bandgap': 'BANDGAP_MED', 'density': 'DENSITY_LOW', 'ehull': 'EHULL_LOW', 'formation_energy': 'FORM_NONE'}
+  - Original: {'band_gap': 2.5, 'density': 3.0, 'energy_above_hull': 0.02, 'formation_energy_per_atom': -2.5}
+  - Discretized: {'band_gap': 'BANDGAP_MED', 'density': 'DENSITY_LOW', 'energy_above_hull': 'EHULL_LOW', 'formation_energy_per_atom': 'FORM_NONE'}
 
 ============================================================
 Test Results: 4/4 passed
@@ -92,10 +92,11 @@ Test Results: 4/4 passed
 ### Basic Model Creation
 
 ```python
-from bifrost.model import BIFROST, create_bifrost_model, get_bifrost_config
+from bifrost.model import BIFROST, create_bifrost_model
+from bifrost.config import create_model_config
 
 # Create a small model
-config = get_bifrost_config("small")
+config = create_model_config("small")
 model = create_bifrost_model(config)
 
 print(f"Model has {model.get_num_parameters():,} parameters")
@@ -112,13 +113,13 @@ python train_demo.py
 
 ```python
 # Small model (7M parameters) - fast training, lower quality
-small_config = get_bifrost_config("small")
+small_config = create_model_config("small")
 
 # Base model (512M parameters) - balanced performance
-base_config = get_bifrost_config("base")
+base_config = create_model_config("base")
 
 # Large model (768M parameters) - best quality, slower training
-large_config = get_bifrost_config("large")
+large_config = create_model_config("large")
 ```
 
 ## Dependency Management

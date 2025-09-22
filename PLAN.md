@@ -32,11 +32,11 @@ All properties are binned into 4 discrete levels: NONE, LOW, MED, HIGH
 
 ```python
 property_bins = {
-    'ehull': {
+    'energy_above_hull': {
         'thresholds': [0.01, 0.05, 0.1],  # eV/atom
         'tokens': ['EHULL_NONE', 'EHULL_LOW', 'EHULL_MED', 'EHULL_HIGH']
     },
-    'bandgap': {
+    'band_gap': {
         'thresholds': [0.5, 2.0, 4.0],  # eV
         'tokens': ['BANDGAP_NONE', 'BANDGAP_LOW', 'BANDGAP_MED', 'BANDGAP_HIGH']
     },
@@ -48,7 +48,7 @@ property_bins = {
         'thresholds': [50, 150, 300],  # GPa
         'tokens': ['BULK_NONE', 'BULK_LOW', 'BULK_MED', 'BULK_HIGH']
     },
-    'formation_energy': {
+    'formation_energy_per_atom': {
         'thresholds': [-2.0, -0.5, 0.0],  # eV/atom
         'tokens': ['FORM_NONE', 'FORM_LOW', 'FORM_MED', 'FORM_HIGH']
     }
@@ -321,7 +321,7 @@ def training_step(batch):
 def generate_structure(property_targets, temperature=0.8, max_length=512):
     """
     property_targets: dict of property_name -> desired_value
-    Example: {'bandgap': 2.5, 'density': 3.0}
+    Example: {'band_gap': 2.5, 'density': 3.0}
     """
     # Build property prefix
     prefix_tokens = []
@@ -489,11 +489,11 @@ structure_data = {
     'wyckoff_positions': List[Dict],
     'lattice': Dict[str, float],
     'properties': {
-        'formation_energy': float,
-        'bandgap': float,  # Optional
+        'formation_energy_per_atom': float,
+        'band_gap': float,  # Optional
         'density': float,  # Optional
         'bulk_modulus': float,  # Optional
-        'ehull': float,
+        'energy_above_hull': float,
     },
     'tokens': List[int],  # Pre-tokenized sequence
 }

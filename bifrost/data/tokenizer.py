@@ -384,18 +384,15 @@ class BIFROSTTokenizer:
             # Wyckoff position token
             wyckoff = pos["wyckoff"]
             wyck_token = None
-            # Prefer unified orbit mapping if available
-            try:
-                key = f"{space_group}_{wyckoff}"
-                orbit_id = self.wyckoff_mapping.get(key)
-                if orbit_id is not None:
-                    wyck_token = f"WYCK_{orbit_id}"
-            except Exception:
-                wyck_token = None
+            key = f"{space_group}_{wyckoff}"
+            orbit_id = self.wyckoff_mapping.get(key)
 
-            # Fallback to direct label if mapping unavailable
-            if wyck_token is None:
-                wyck_token = f"WYCK_{wyckoff}"
+            if orbit_id is None:
+                raise ValueError(
+                    f"Wyckoff position {wyckoff} not found for space group {space_group}"
+                )
+
+            wyck_token = f"WYCK_{orbit_id}"
             tokens.append(self.vocab.get(wyck_token, self.vocab["UNK"]))
             token_types.append(0)  # discrete
 
@@ -463,24 +460,179 @@ class BIFROSTTokenizer:
 
         return tokens, token_types
 
-    def decode_sequence(self, tokens: List[int]) -> Dict[str, Any]:
-        """
-        Convert token sequence back to structure data.
+    def decode_structure(
+        self,
+        tokens: np.ndarray,
+        token_types: np.ndarray,
+        max_elements: int = 20,
+    ) -> Optional[Dict[str, Any]]:
+        """Decode token and type sequences into a crystal structure.
 
-        This is a simplified decoder for demonstration.
-        A full implementation would need more sophisticated parsing.
-        """
-        # This is a placeholder - full implementation would require
-        # parsing the sequence structure and converting tokens back
-        # to structure components
+        Args:
+            tokens: Token ID sequence (numpy array)
+            token_types: Token type sequence (numpy array)
+            max_elements: Maximum number of element entries to consider
 
-        return {
-            "composition": [],  # Would parse element/count pairs
-            "space_group": 1,  # Would parse space group token
-            "wyckoff_positions": [],  # Would parse wyckoff/element/coord triples
-            "lattice": {},  # Would parse lattice parameters
-            "properties": {},  # Would parse property prefix
+        Returns:
+            Parsed structure dictionary or None if decoding fails.
+        """
+        # Remove special tokens and padding
+        tokens, token_types = self._clean_sequence(tokens, token_types)
+
+        if len(tokens) == 0:
+            return None
+
+        structure: Dict[str, Any] = {
+            "structure_id": f"generated_{hash(tuple(tokens)) % 10000}",
+            "composition": [],
+            "wyckoff_positions": [],
+            "lattice": {},
+            "properties": {},
+            "space_group": None,
         }
+
+        reverse_vocab = self.reverse_vocab
+
+        def is_continuous_value(val: float) -> bool:
+            as_int = int(val)
+            return abs(val - as_int) > 1e-6 or (as_int not in reverse_vocab)
+
+        i = 0
+        last_wyck: Optional[str] = None
+        while i < len(tokens):
+            raw = tokens[i]
+            if is_continuous_value(raw):
+                i += 1
+                continue
+
+            tid = int(raw)
+            tname = reverse_vocab.get(tid, "UNK")
+
+            if tname.startswith("SPACE_"):
+                try:
+                    structure["space_group"] = int(tname.split("_")[1])
+                except Exception:
+                    pass
+                i += 1
+                continue
+
+            if tname.startswith("COUNT_") and structure["composition"]:
+                try:
+                    count = int(tname.split("_")[1])
+                    elem, _ = structure["composition"][-1]
+                    structure["composition"][-1] = (elem, count)
+                except Exception:
+                    pass
+                i += 1
+                continue
+
+            if tname.startswith("WYCK_"):
+                last_wyck = tname.replace("WYCK_", "")
+                i += 1
+                # Expect element + 3 coords
+                if i < len(tokens) and not is_continuous_value(tokens[i]):
+                    elem_name = reverse_vocab.get(int(tokens[i]), "UNK")
+                    coords: List[float] = []
+                    j = i + 1
+                    while j < len(tokens) and len(coords) < 3:
+                        if is_continuous_value(tokens[j]):
+                            coords.append(self._decode_continuous_token(tokens[j]))
+                        j += 1
+                    if elem_name != "UNK" and len(coords) == 3:
+                        structure["wyckoff_positions"].append(
+                            {
+                                "element": elem_name,
+                                "wyckoff": last_wyck,
+                                "coordinates": coords,
+                            }
+                        )
+                    i = j
+                    continue
+                continue
+
+            # Element symbols are alphabetic, length <= 2
+            if (
+                tname.isalpha()
+                and len(tname) <= 2
+                and len(structure["composition"]) < max_elements
+            ):
+                structure["composition"].append((tname, 1))
+                i += 1
+                continue
+
+            i += 1
+
+        # Lattice: last 6 continuous as a,b,c,alpha,beta,gamma
+        cont_vals = [
+            self._decode_continuous_token(v) for v in tokens if is_continuous_value(v)
+        ]
+        if len(cont_vals) >= 6:
+            a, b, c, alpha, beta, gamma = cont_vals[-6:]
+            structure["lattice"] = {
+                "a": float(a),
+                "b": float(b),
+                "c": float(c),
+                "alpha": float(alpha),
+                "beta": float(beta),
+                "gamma": float(gamma),
+            }
+
+        if not self._validate_structure(structure):
+            return None
+
+        return structure
+
+    def decode_sequence(
+        self, tokens: List[float], token_types: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        """Convenience method to decode a single sequence.
+
+        Accepts Python lists, converts to numpy, and delegates to decode_structure.
+        If token_types is not provided, a zero vector is used.
+        """
+        np_tokens = np.array(tokens)
+        if token_types is None:
+            np_types = np.zeros_like(np_tokens)
+        else:
+            np_types = np.array(token_types)
+        result = self.decode_structure(np_tokens, np_types)
+        return result or {
+            "composition": [],
+            "space_group": None,
+            "wyckoff_positions": [],
+            "lattice": {},
+            "properties": {},
+        }
+
+    def _clean_sequence(
+        self, tokens: np.ndarray, token_types: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Remove special tokens and padding from a sequence."""
+        special_tokens = [
+            self.special_tokens["PAD"],
+            self.special_tokens["UNK"],
+            self.special_tokens["EOS"],
+            self.special_tokens["BOS"],
+        ]
+        mask = ~np.isin(tokens, special_tokens)
+        cleaned_tokens = tokens[mask]
+        cleaned_types = (
+            token_types[mask]
+            if len(token_types) == len(tokens)
+            else np.zeros_like(cleaned_tokens)
+        )
+        return cleaned_tokens, cleaned_types
+
+    def _decode_continuous_token(self, token_val: float) -> float:
+        """Convert continuous token back to float (identity for now)."""
+        try:
+            return float(token_val)
+        except Exception:
+            return 0.0
+
+    def _validate_structure(self, structure: Dict[str, Any]) -> bool:
+        """Lenient validity: require at least non-empty composition."""
+        return bool(structure.get("composition"))
 
     def is_discrete_token(self, token: Union[str, int]) -> bool:
         """Check if a token represents a discrete value."""

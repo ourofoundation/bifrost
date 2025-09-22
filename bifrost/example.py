@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 # Import BIFROST components
-from .model import BIFROST, create_bifrost_model, get_bifrost_config
+from .model import BIFROST, create_bifrost_model
 from .data.tokenizer import tokenizer
 from .data.dataset import CrystalStructureDataset, create_dataloader, load_sample_dataset
 from .data.properties import discretize_structure_properties
@@ -49,10 +49,10 @@ def create_sample_data() -> List[Dict[str, Any]]:
                 'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0
             },
             'properties': {
-                'bandgap': 3.5,
+                'band_gap': 3.5,
                 'density': 3.5,
-                'ehull': 0.05,
-                'formation_energy': -2.3
+                'energy_above_hull': 0.05,
+                'formation_energy_per_atom': -2.3
             }
         },
         {
@@ -68,10 +68,10 @@ def create_sample_data() -> List[Dict[str, Any]]:
                 'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0
             },
             'properties': {
-                'bandgap': 5.2,
+                'band_gap': 5.2,
                 'density': 2.16,
-                'ehull': 0.0,
-                'formation_energy': -4.1
+                'energy_above_hull': 0.0,
+                'formation_energy_per_atom': -4.1
             }
         }
     ]
@@ -170,9 +170,9 @@ def generate_structures(model: BIFROST):
 
     # Example property targets
     property_targets = {
-        'bandgap': 2.5,  # eV
+        'band_gap': 2.5,  # eV
         'density': 3.0,  # g/cm³
-        'ehull': 0.02    # eV/atom
+        'energy_above_hull': 0.02    # eV/atom
     }
 
     print(f"Target properties: {property_targets}")

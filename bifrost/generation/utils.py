@@ -153,21 +153,30 @@ def validate_property_ranges(
         thresholds = property_bins[prop_name]["thresholds"]
 
         # Adjust ranges to be within reasonable bounds
-        if prop_name == "bandgap":
+        if prop_name == "band_gap":
             min_val = max(0.0, min_val)
             max_val = min(10.0, max_val)
         elif prop_name == "density":
             min_val = max(0.1, min_val)
             max_val = min(20.0, max_val)
-        elif prop_name == "ehull":
+        elif prop_name == "energy_above_hull":
             min_val = max(0.0, min_val)
             max_val = min(1.0, max_val)
-        elif prop_name == "formation_energy":
+        elif prop_name == "formation_energy_per_atom":
             min_val = max(-10.0, min_val)
             max_val = min(5.0, max_val)
         elif prop_name == "bulk_modulus":
             min_val = max(0.0, min_val)
             max_val = min(500.0, max_val)
+        elif prop_name == "shear_modulus":
+            min_val = max(0.0, min_val)
+            max_val = min(500.0, max_val)
+        elif prop_name == "efermi":
+            min_val = max(0.0, min_val)
+            max_val = min(10.0, max_val)
+        elif prop_name == "total_magnetization":
+            min_val = max(0.0, min_val)
+            max_val = min(10.0, max_val)
 
         validated_ranges[prop_name] = (min_val, max_val)
 
@@ -178,23 +187,23 @@ def get_property_examples() -> Dict[str, Dict[str, Any]]:
     """Get example property configurations for different use cases."""
     examples = {
         "semiconductor": {
-            "bandgap": 2.0,
-            "ehull": 0.05,
+            "band_gap": 2.0,
+            "energy_above_hull": 0.05,
             "density": 4.0,
         },
         "metal": {
-            "bandgap": 0.0,
-            "ehull": 0.0,
+            "band_gap": 0.0,
+            "energy_above_hull": 0.0,
             "density": 8.0,
         },
         "insulator": {
-            "bandgap": 5.0,
-            "ehull": 0.1,
+            "band_gap": 5.0,
+            "energy_above_hull": 0.1,
             "density": 3.0,
         },
         "lightweight": {
             "density": 2.0,
-            "formation_energy": -1.0,
+            "formation_energy_per_atom": -1.0,
         },
         "high_density": {
             "density": 10.0,

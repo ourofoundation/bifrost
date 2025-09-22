@@ -29,7 +29,7 @@ __version__ = "1.0.0"
 __author__ = "BIFROST Team"
 
 # Import main components for easy access
-from .model import BIFROST, create_bifrost_model, get_bifrost_config
+from .model import BIFROST, create_bifrost_model
 from .config import (
     create_model_config,
     create_training_config,
@@ -41,7 +41,6 @@ from .config import (
 __all__ = [
     "BIFROST",
     "create_bifrost_model",
-    "get_bifrost_config",
     "create_model_config",
     "create_training_config",
     "create_generation_config",

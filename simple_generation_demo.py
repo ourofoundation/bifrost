@@ -10,10 +10,11 @@ import random
 import numpy as np
 from typing import Dict, Any, List
 
-from bifrost.model import create_bifrost_model, get_bifrost_config
+from bifrost.model import create_bifrost_model
 from bifrost.data.tokenizer import tokenizer
 from bifrost.data.properties import discretize_structure_properties
 from bifrost.generation.decoder import StructureDecoder
+from bifrost.config import create_model_config
 
 
 def create_simple_structure(property_values: Dict[str, float]) -> Dict[str, Any]:
@@ -78,7 +79,7 @@ def main():
     print("=" * 60)
 
     # Create model
-    config = get_bifrost_config("small")
+    config = create_model_config("small")
     model = create_bifrost_model(config)
     model.eval()
 
@@ -89,10 +90,10 @@ def main():
 
     # Example property configurations
     examples = {
-        "semiconductor": {"bandgap": 2.0, "density": 4.0, "ehull": 0.05},
-        "metal": {"bandgap": 0.0, "density": 8.0, "ehull": 0.0},
-        "insulator": {"bandgap": 5.0, "density": 3.0, "ehull": 0.1},
-        "lightweight": {"density": 2.0, "formation_energy": -1.0},
+        "semiconductor": {"band_gap": 2.0, "density": 4.0, "energy_above_hull": 0.05},
+        "metal": {"band_gap": 0.0, "density": 8.0, "energy_above_hull": 0.0},
+        "insulator": {"band_gap": 5.0, "density": 3.0, "energy_above_hull": 0.1},
+        "lightweight": {"density": 2.0, "formation_energy_per_atom": -1.0},
     }
 
     print("\nGenerating structures with different property profiles...")

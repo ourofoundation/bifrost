@@ -15,12 +15,12 @@ class PropertyBinner:
     def __init__(self):
         """Initialize property binning configuration."""
         self.property_bins = {
-            "ehull": {
+            "energy_above_hull": {
                 "thresholds": [0.01, 0.05, 0.1],  # eV/atom
                 "tokens": ["EHULL_NONE", "EHULL_LOW", "EHULL_MED", "EHULL_HIGH"],
                 "description": "Energy above convex hull",
             },
-            "bandgap": {
+            "band_gap": {
                 "thresholds": [0.5, 2.0, 4.0],  # eV
                 "tokens": [
                     "BANDGAP_NONE",
@@ -45,10 +45,25 @@ class PropertyBinner:
                 "tokens": ["BULK_NONE", "BULK_LOW", "BULK_MED", "BULK_HIGH"],
                 "description": "Bulk modulus",
             },
-            "formation_energy": {
+            "shear_modulus": {
+                "thresholds": [50, 150, 300],  # GPa
+                "tokens": ["SHEAR_NONE", "SHEAR_LOW", "SHEAR_MED", "SHEAR_HIGH"],
+                "description": "Shear modulus",
+            },
+            "efermi": {
+                "thresholds": [0.0, 5.0, 10.0],  # eV
+                "tokens": ["EFERMI_NONE", "EFERMI_LOW", "EFERMI_MED", "EFERMI_HIGH"],
+                "description": "Fermi energy",
+            },
+            "total_magnetization": {
+                "thresholds": [0.0, 5.0, 10.0],  # μB/atom
+                "tokens": ["MAG_NONE", "MAG_LOW", "MAG_MED", "MAG_HIGH"],
+                "description": "Total magnetization",
+            },
+            "formation_energy_per_atom": {
                 "thresholds": [-2.0, -0.5, 0.0],  # eV/atom
                 "tokens": ["FORM_NONE", "FORM_LOW", "FORM_MED", "FORM_HIGH"],
-                "description": "Formation energy",
+                "description": "Formation energy per atom",
             },
         }
 
@@ -79,7 +94,7 @@ class PropertyBinner:
         Get the discrete bin for a specific property.
 
         Args:
-            prop_name: Name of the property (e.g., 'bandgap', 'density')
+            prop_name: Name of the property (e.g., 'band_gap', 'density')
             value: Continuous property value
 
         Returns:

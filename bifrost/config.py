@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Default configurations
 DEFAULT_MODEL_CONFIG = {
-    "vocab_size": 1430,
+    # "vocab_size": 1430,
     "d_model": 512,
     "n_heads": 16,
     "n_layers": 16,
@@ -49,18 +49,24 @@ MODEL_PRESETS = {
         "n_heads": 8,
         "n_layers": 8,
         "d_ff": 1024,
+        "dropout": 0.1,
+        "max_seq_len": 128,
     },
     "base": {
         "d_model": 512,
         "n_heads": 16,
         "n_layers": 16,
         "d_ff": 2048,
+        "dropout": 0.1,
+        "max_seq_len": 512,
     },
     "large": {
         "d_model": 768,
         "n_heads": 16,
         "n_layers": 24,
         "d_ff": 3072,
+        "dropout": 0.1,
+        "max_seq_len": 512,
     },
 }
 
@@ -183,7 +189,11 @@ def example_generation_setup():
         "generation_config": create_generation_config(
             {"temperature": 0.8, "top_k": 50, "max_length": 512}
         ),
-        "property_targets": {"bandgap": 2.5, "density": 3.0, "ehull": 0.02},
+        "property_targets": {
+            "band_gap": 2.5,
+            "density": 3.0,
+            "energy_above_hull": 0.02,
+        },
     }
 
 

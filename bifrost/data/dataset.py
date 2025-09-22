@@ -47,8 +47,42 @@ class CrystalStructureDataset(Dataset):
         self.property_removal = property_removal
         self.curriculum_level = curriculum_level
 
+        # Drop structures that contain invalid space-group/Wyckoff combinations
+        self.data = self._filter_invalid_wyckoff(data)
+
         # Apply curriculum filtering
-        self.data = self._apply_curriculum_filtering(data)
+        self.data = self._apply_curriculum_filtering(self.data)
+
+    def _filter_invalid_wyckoff(
+        self, data: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Remove structures containing any Wyckoff labels not present in mapping.
+
+        This prevents tokenizer errors like: "Wyckoff position 8g not found for space group 70".
+        """
+        mapping = getattr(self.tokenizer, "wyckoff_mapping", None)
+        if not isinstance(mapping, dict) or not mapping:
+            # If mapping unavailable, keep data unchanged
+            return data
+
+        filtered: List[Dict[str, Any]] = []
+        removed: List[Dict[str, Any]] = []
+        for structure in data:
+            sg = int(structure.get("space_group", -1))
+            wyckoff_positions = structure.get("wyckoff_positions", [])
+            ok = True
+            for pos in wyckoff_positions:
+                wy = pos.get("wyckoff")
+                key = f"{sg}_{wy}"
+                if mapping.get(key) is None:
+                    ok = False
+                    break
+            if ok:
+                filtered.append(structure)
+            else:
+                removed.append(structure)
+        print(f"Removed {len(removed)} structures due to invalid Wyckoff positions")
+        return filtered
 
     def _apply_curriculum_filtering(
         self, data: List[Dict[str, Any]]
@@ -327,10 +361,10 @@ def load_sample_dataset(filepath: str) -> List[Dict[str, Any]]:
                 "gamma": 90,
             },
             "properties": {
-                "bandgap": 2.5,
+                "band_gap": 2.5,
                 "density": 3.2,
-                "ehull": 0.02,
-                "formation_energy": -2.5,
+                "energy_above_hull": 0.02,
+                "formation_energy_per_atom": -2.5,
             },
         }
     ]

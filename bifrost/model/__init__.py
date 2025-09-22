@@ -5,7 +5,7 @@ This package contains all the components needed to build and train
 the BIFROST crystal structure generation model.
 """
 
-from .bifrost import BIFROST, create_bifrost_model, get_bifrost_config, BIFROST_CONFIGS
+from .bifrost import BIFROST, create_bifrost_model
 from .embeddings import (
     BIFROSTEmbedding,
     PositionalEncoding,
@@ -23,8 +23,6 @@ from .heads import BIFROSTHeads, DiscreteHead, ContinuousHead, TokenTypePredicto
 __all__ = [
     "BIFROST",
     "create_bifrost_model",
-    "get_bifrost_config",
-    "BIFROST_CONFIGS",
     "BIFROSTEmbedding",
     "PositionalEncoding",
     "ContinuousValueEncoder",

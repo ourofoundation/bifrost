@@ -9,10 +9,10 @@ import numpy as np
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pathlib import Path
 
-from ..model import BIFROST, create_bifrost_model, get_bifrost_config
+from ..model import BIFROST, create_bifrost_model
 from ..data.tokenizer import tokenizer
 from ..data.properties import discretize_structure_properties, get_property_bins
-from .decoder import StructureDecoder
+from ..config import create_model_config
 
 
 class BIFROSTGenerator:
@@ -48,7 +48,7 @@ class BIFROSTGenerator:
         print(f"Using device: {self.device}")
 
         # Create model
-        config = get_bifrost_config(model_config)
+        config = create_model_config(model_config)
         # Always align vocab size with tokenizer so Wyckoff/lattice vocab matches
         config["vocab_size"] = tokenizer.get_vocab_size()
 
@@ -60,8 +60,7 @@ class BIFROSTGenerator:
         if model_path:
             self.load_checkpoint(model_path)
 
-        # Create decoder
-        self.decoder = StructureDecoder(tokenizer)
+        # Decoding handled by tokenizer now
 
         # Get property information
         self.property_bins = get_property_bins()
@@ -146,7 +145,7 @@ class BIFROSTGenerator:
     def generate(
         self,
         target_properties: Dict[str, Union[float, str]],
-        max_length: int = 512,
+        max_length: Optional[int] = None,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -158,7 +157,7 @@ class BIFROSTGenerator:
 
         Args:
             target_properties: Target properties to condition generation on
-            max_length: Maximum sequence length for generation
+            max_length: Maximum sequence length for generation (defaults to model's max_seq_len)
             temperature: Sampling temperature
             top_k: Top-k sampling parameter
             top_p: Top-p (nucleus) sampling parameter
@@ -168,6 +167,18 @@ class BIFROSTGenerator:
         Returns:
             List of generated crystal structures
         """
+        # Use model's max_seq_len as default
+        if max_length is None:
+            max_length = self.model.max_seq_len
+
+        # Validate max_length doesn't exceed model's capability
+        if max_length > self.model.max_seq_len:
+            print(
+                f"Warning: Requested max_length ({max_length}) exceeds model's maximum ({self.model.max_seq_len})"
+            )
+            print(f"Reducing max_length to {self.model.max_seq_len}")
+            max_length = self.model.max_seq_len
+
         print("Generating crystal structures...")
         print(f"Target properties: {target_properties}")
 
@@ -204,7 +215,7 @@ class BIFROSTGenerator:
                 types = generated_types[i].cpu().numpy()
 
                 try:
-                    structure = self.decoder.decode_structure(tokens, types)
+                    structure = tokenizer.decode_structure(tokens, types)
                     if structure:
                         structure["generated_properties"] = target_properties.copy()
                         generated_structures.append(structure)
@@ -218,7 +229,7 @@ class BIFROSTGenerator:
     def generate_sequences(
         self,
         target_properties: Dict[str, Union[float, str]],
-        max_length: int = 512,
+        max_length: Optional[int] = None,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -228,8 +239,29 @@ class BIFROSTGenerator:
         """
         Generate raw token/type sequences with property conditioning.
 
-        Returns a list of dicts with keys: 'tokens' (List[float]) and 'types' (List[int]).
+        Args:
+            target_properties: Target properties to condition generation on
+            max_length: Maximum sequence length for generation (defaults to model's max_seq_len)
+            temperature: Sampling temperature
+            top_k: Top-k sampling parameter
+            top_p: Top-p (nucleus) sampling parameter
+            num_samples: Number of sequences to generate
+            batch_size: Batch size for generation
+
+        Returns:
+            List of dicts with keys: 'tokens' (List[float]) and 'types' (List[int])
         """
+        # Use model's max_seq_len as default
+        if max_length is None:
+            max_length = self.model.max_seq_len
+
+        # Validate max_length doesn't exceed model's capability
+        if max_length > self.model.max_seq_len:
+            print(
+                f"Warning: Requested max_length ({max_length}) exceeds model's maximum ({self.model.max_seq_len})"
+            )
+            print(f"Reducing max_length to {self.model.max_seq_len}")
+            max_length = self.model.max_seq_len
         print("Generating raw sequences...")
         print(f"Target properties: {target_properties}")
 
@@ -350,10 +382,13 @@ class BIFROSTGenerator:
     def _get_property_units(self, prop_name: str) -> str:
         """Get units for a property."""
         units = {
-            "bandgap": "eV",
+            "band_gap": "eV",
             "density": "g/cm³",
-            "ehull": "eV/atom",
+            "energy_above_hull": "eV/atom",
             "bulk_modulus": "GPa",
-            "formation_energy": "eV/atom",
+            "efermi": "eV",
+            "total_magnetization": "μB/atom",
+            "formation_energy_per_atom": "eV/atom",
+            "shear_modulus": "GPa",
         }
         return units.get(prop_name, "unknown")

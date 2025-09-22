@@ -334,7 +334,21 @@ class BIFROSTTrainer:
             epoch: Current epoch
             metrics: Training metrics
         """
-        checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch + 1}.pt"
+        # Get model size information for filename
+        model_size_info = self.model.get_model_size()
+        total_params = model_size_info["total_parameters"]
+
+        # Create a compact model size identifier based on parameter count
+        if total_params < 8_000_000:  # Less than 50M parameters
+            size_suffix = "small"
+        elif total_params < 150_000_000:  # Less than 150M parameters
+            size_suffix = "base"
+        else:  # 150M+ parameters
+            size_suffix = "large"
+
+        checkpoint_path = (
+            self.checkpoint_dir / f"checkpoint_epoch_{epoch + 1}_{size_suffix}.pt"
+        )
 
         checkpoint = {
             "epoch": epoch + 1,

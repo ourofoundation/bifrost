@@ -66,7 +66,7 @@ structures = [
         'space_group': 62,
         'wyckoff_positions': [...],
         'lattice': {...},
-        'properties': {'bandgap': 3.5, 'density': 3.5}
+        'properties': {'band_gap': 3.5, 'density': 3.5}
     }
 ]
 
@@ -102,9 +102,9 @@ Generate structures with target properties:
 ```python
 # Target properties
 property_targets = {
-    'bandgap': 2.5,      # eV
+    'band_gap': 2.5,      # eV
     'density': 3.0,      # g/cm³
-    'ehull': 0.02        # eV/atom
+    'energy_above_hull': 0.02        # eV/atom
 }
 
 # Generate structure conditioned on these properties
@@ -176,7 +176,7 @@ Continuous properties are binned into discrete levels:
 
 ```python
 property_bins = {
-    'bandgap': {
+    'band_gap': {
         'thresholds': [0.5, 2.0, 4.0],  # eV
         'tokens': ['BANDGAP_NONE', 'BANDGAP_LOW', 'BANDGAP_MED', 'BANDGAP_HIGH']
     },

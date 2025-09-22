@@ -22,16 +22,16 @@ def create_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   # Generate structures with specific properties
-  bifrost-generate --properties '{"bandgap": 2.0, "density": 4.0}' --num-samples 10
+  bifrost-generate --properties '{"band_gap": 2.0, "density": 4.0}' --num-samples 10
 
   # Generate with property ranges
-  bifrost-generate --ranges '{"bandgap": [1.0, 3.0], "ehull": [0.0, 0.1]}' --num-samples 5
+  bifrost-generate --ranges '{"band_gap": [1.0, 3.0], "ehull": [0.0, 0.1]}' --num-samples 5
 
   # Use example configurations
   bifrost-generate --example semiconductor --num-samples 20
 
   # Generate with custom model
-  bifrost-generate --model-path checkpoints/model.pt --properties '{"bandgap": 3.0}'
+  bifrost-generate --model-path checkpoints/model.pt --properties '{"band_gap": 3.0}'
         """,
     )
 
@@ -60,13 +60,13 @@ Examples:
     prop_group.add_argument(
         "--properties",
         type=str,
-        help='JSON string of target properties, e.g., \'{"bandgap": 2.0, "density": 4.0}\'',
+        help='JSON string of target properties, e.g., \'{"band_gap": 2.0, "density": 4.0}\'',
     )
 
     prop_group.add_argument(
         "--ranges",
         type=str,
-        help='JSON string of property ranges, e.g., \'{"bandgap": [1.0, 3.0], "density": [3.0, 5.0]}\'',
+        help='JSON string of property ranges, e.g., \'{"band_gap": [1.0, 3.0], "density": [3.0, 5.0]}\'',
     )
 
     prop_group.add_argument(
@@ -94,8 +94,8 @@ Examples:
     parser.add_argument(
         "--max-length",
         type=int,
-        default=512,
-        help="Maximum sequence length for generation (default: 512)",
+        default=None,
+        help="Maximum sequence length for generation (defaults to model's max_seq_len)",
     )
 
     parser.add_argument(
@@ -265,6 +265,20 @@ def main():
             print(f"Warning: Unknown properties: {invalid_props}")
             print("Available properties:", list(available_props.keys()))
 
+    # Use model's max_seq_len as default if not specified
+    max_length = args.max_length
+    if max_length is None:
+        max_length = generator.model.max_seq_len
+        print(f"Using model's max sequence length: {max_length}")
+
+    # Validate max_length doesn't exceed model's capability
+    if max_length > generator.model.max_seq_len:
+        print(
+            f"Warning: Requested max_length ({max_length}) exceeds model's maximum ({generator.model.max_seq_len})"
+        )
+        print(f"Reducing max_length to {generator.model.max_seq_len}")
+        max_length = generator.model.max_seq_len
+
     # Generate sequences or structures
     try:
         if args.print_sequences:
@@ -275,16 +289,16 @@ def main():
                 top_k=args.top_k,
                 top_p=args.top_p,
                 batch_size=args.batch_size,
-                max_length=args.max_length,
+                max_length=max_length,
             )
             # Print a compact view of sequences
             for idx, s in enumerate(sequences):
                 print(f"\nSequence {idx+1}:")
-                print(f"  tokens (first 64): {s['tokens'][:64]}")
-                print(f"  types  (first 64): {s['types'][:64]}")
+                print(f"  tokens: {s['tokens']}")
+                # print(f"  types: {s['types']}")
                 if args.print_decoded:
-                    decoded = generator.decode_tokens(s["tokens"])[:64]
-                    print(f"  decoded (first 64): {decoded}")
+                    decoded = generator.decode_tokens(s["tokens"])
+                    print(f"  decoded: {decoded}")
             print(f"\nPrinted {len(sequences)} sequences.")
             return
         elif args.ranges:
@@ -295,7 +309,7 @@ def main():
                 top_k=args.top_k,
                 top_p=args.top_p,
                 batch_size=args.batch_size,
-                max_length=args.max_length,
+                max_length=max_length,
             )
         else:
             structures = generator.generate(
@@ -305,7 +319,7 @@ def main():
                 top_k=args.top_k,
                 top_p=args.top_p,
                 batch_size=args.batch_size,
-                max_length=args.max_length,
+                max_length=max_length,
             )
 
     except Exception as e:
