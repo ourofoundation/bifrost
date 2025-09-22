@@ -22,15 +22,15 @@ DEFAULT_MODEL_CONFIG = {
 }
 
 DEFAULT_TRAINING_CONFIG = {
-    "learning_rate": 2e-4,
+    "learning_rate": 3e-3,
     "weight_decay": 0.01,
-    "warmup_steps": 10000,
+    "warmup_steps": 1000,
     "scheduler_type": "one_cycle",
-    "mixed_precision": True,
+    "mixed_precision": False,
     "gradient_clip": 1.0,
     "batch_size": 256,
     "log_interval": 100,
-    "enable_curriculum": True,
+    "enable_curriculum": False,
     "checkpoint_dir": "checkpoints",
 }
 
