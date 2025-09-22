@@ -10,4 +10,4 @@ cd /Users/mmoderwell/ouro/bifrost && python bifrost/data/mp/generate_mp_dataset.
 
 
 
-bifrost-train --model-size small --epochs 2 --batch-size 8
+bifrost-train --model-size small --epochs 10 --batch-size 64 --dataset bifrost/data/mp/mp_dataset.json --tensorboard

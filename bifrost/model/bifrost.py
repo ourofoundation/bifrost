@@ -173,16 +173,22 @@ class BIFROST(nn.Module):
         target_continuous_mask = target_types == 1
 
         # Compute loss using heads
-        total_loss, discrete_loss, continuous_loss = self.heads.compute_loss(
-            hidden_states, target_tokens, target_types.float(), target_continuous_mask
+        # Note: pass attention_mask to mask out padding in all loss terms
+        total_loss, discrete_loss, continuous_loss, type_loss = self.heads.compute_loss(
+            hidden_states,
+            target_tokens,
+            target_types.float(),
+            target_continuous_mask,
+            attention_mask=attention_mask,
         )
 
         # Return loss and components
+        # Structured components for logging and epoch aggregation
         loss_components = {
-            "total": total_loss,
-            "discrete": discrete_loss,
-            "continuous": continuous_loss,
-            "type_prediction": torch.tensor(0.0),  # Placeholder
+            "total_loss": total_loss,
+            "discrete_loss": discrete_loss,
+            "continuous_loss": continuous_loss,
+            "type_prediction_loss": type_loss,
         }
 
         return total_loss, loss_components

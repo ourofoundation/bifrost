@@ -361,36 +361,45 @@ class BIFROSTHeads(nn.Module):
         target_tokens: torch.Tensor,
         target_types: torch.Tensor,
         continuous_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Compute combined loss for discrete and continuous predictions.
+        Compute combined loss for discrete and continuous predictions, plus token-type loss.
 
         Args:
             hidden_states: Model outputs (batch_size, seq_len, d_model)
             target_tokens: Target token IDs (batch_size, seq_len)
             target_types: Target token types (batch_size, seq_len)
             continuous_mask: Mask indicating continuous targets (batch_size, seq_len)
+            attention_mask: Mask of valid (non-padding) positions (batch_size, seq_len)
             ignore_index: Index to ignore in loss computation
 
         Returns:
-            Tuple of (total_loss, discrete_loss, continuous_loss)
+            Tuple of (total_loss, discrete_loss, continuous_loss, type_loss)
         """
         # Get predictions
         discrete_logits, continuous_params, type_probs = self.forward(hidden_states)
 
-        # Compute discrete loss (cross-entropy)
-        discrete_mask = ~continuous_mask
-        if discrete_mask.any():
-            discrete_logits_flat = discrete_logits[discrete_mask]
-            target_tokens_flat = target_tokens[discrete_mask].long()
+        # Build a validity mask to exclude padded positions from all loss terms
+        # If no attention_mask provided, treat all positions as valid
+        if attention_mask is not None:
+            valid_positions = attention_mask.bool()
+        else:
+            valid_positions = torch.ones_like(target_tokens, dtype=torch.bool)
 
-            # Ignore padding tokens
-            valid_mask = target_tokens_flat != ignore_index
-            if valid_mask.any():
+        # Compute discrete loss (cross-entropy) on valid, discrete positions only
+        discrete_positions = (~continuous_mask) & valid_positions
+        if discrete_positions.any():
+            discrete_logits_flat = discrete_logits[discrete_positions]
+            target_tokens_flat = target_tokens[discrete_positions].long()
+
+            # Optional: also respect ignore_index if present in targets
+            keep_mask = target_tokens_flat != ignore_index
+            if keep_mask.any():
                 discrete_loss = F.cross_entropy(
-                    discrete_logits_flat[valid_mask],
-                    target_tokens_flat[valid_mask],
+                    discrete_logits_flat[keep_mask],
+                    target_tokens_flat[keep_mask],
                     reduction="mean",
                 )
             else:
@@ -398,10 +407,11 @@ class BIFROSTHeads(nn.Module):
         else:
             discrete_loss = torch.tensor(0.0, device=hidden_states.device)
 
-        # Compute continuous loss (Gaussian negative log likelihood)
-        if continuous_mask.any():
-            continuous_params_flat = continuous_params[continuous_mask]
-            target_tokens_flat = target_tokens[continuous_mask].float()
+        # Compute continuous loss (Gaussian negative log likelihood) on valid, continuous positions only
+        continuous_positions = continuous_mask & valid_positions
+        if continuous_positions.any():
+            continuous_params_flat = continuous_params[continuous_positions]
+            target_tokens_flat = target_tokens[continuous_positions].float()
 
             mean, log_var = continuous_params_flat.split(1, dim=-1)
 
@@ -415,13 +425,19 @@ class BIFROSTHeads(nn.Module):
         else:
             continuous_loss = torch.tensor(0.0, device=hidden_states.device)
 
-        # Compute token type loss (binary cross-entropy)
-        target_type_probs = target_types.float()
-        type_loss = F.binary_cross_entropy_with_logits(
-            type_probs.squeeze(-1), target_type_probs, reduction="mean"
+        # Compute token type loss (binary cross-entropy) on valid positions only
+        # target_types: 0 = discrete, 1 = continuous
+        type_logits = type_probs.squeeze(-1)  # (batch, seq)
+        target_type_probs = target_types.float()  # (batch, seq)
+        per_pos_type_loss = F.binary_cross_entropy_with_logits(
+            type_logits, target_type_probs, reduction="none"
         )
+        if valid_positions.any():
+            type_loss = per_pos_type_loss[valid_positions].mean()
+        else:
+            type_loss = torch.tensor(0.0, device=hidden_states.device)
 
         # Combine losses
         total_loss = discrete_loss + continuous_loss + type_loss
 
-        return total_loss, discrete_loss, continuous_loss
+        return total_loss, discrete_loss, continuous_loss, type_loss

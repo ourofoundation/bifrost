@@ -127,8 +127,8 @@ Examples:
     parser.add_argument(
         "--eval-interval",
         type=int,
-        default=5,
-        help="Epochs between validations (default: 5)",
+        default=1,
+        help="Epochs between validations (default: 1)",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -320,8 +320,8 @@ def main():
         else None
     )
 
-    print(f"Train dataset: {len(train_dataset)}")
-    print(f"Val dataset: {len(val_dataset)}")
+    logger.info(f"Train dataset: {len(train_dataset)}")
+    logger.info(f"Val dataset: {len(val_dataset)}")
 
     # Training config
     base_train_cfg = create_training_config("default")

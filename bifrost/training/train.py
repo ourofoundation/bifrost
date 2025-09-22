@@ -504,7 +504,7 @@ class BIFROSTTrainer:
         return checkpoint.get("epoch", 0)
 
     def train(
-        self, num_epochs: int, save_interval: int = 10, eval_interval: int = 5
+        self, num_epochs: int, save_interval: int = 10, eval_interval: int = 1
     ) -> Dict[str, Any]:
         """
         Main training loop.
