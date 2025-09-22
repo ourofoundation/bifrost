@@ -9,6 +9,7 @@ import torch
 import json
 import random
 from typing import Dict, Any, List
+import os
 
 # Import BIFROST components
 from bifrost.model import BIFROST, create_bifrost_model
