@@ -47,6 +47,7 @@ dependencies = [
     "pymatgen>=2023.1.0",
     "spglib>=2.0.0",
     "pyxtal>=0.6.6",
+    "tensorboard>=2.9.0",
 
 ]
 

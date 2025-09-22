@@ -13,6 +13,7 @@ import logging
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from pathlib import Path
 import json
+from torch.utils.tensorboard import SummaryWriter
 
 from ..model import BIFROST
 from .curriculum import CurriculumManager
@@ -150,7 +151,11 @@ class BIFROSTTrainer:
 
         # Set up configuration
         self.config = config or {}
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available() else "cpu"
+        )
 
         # Move model to device
         self.model.to(self.device)
@@ -168,6 +173,68 @@ class BIFROSTTrainer:
 
         # Logging setup
         self.setup_logging()
+
+        # TensorBoard setup
+        self.tb_writer: Optional[SummaryWriter] = None
+        self.tb_log_dir: Optional[Path] = None
+        if self.config.get("tensorboard", False):
+            base_log_dir = Path(self.config.get("tensorboard_log_dir", "runs/bifrost"))
+            base_log_dir.mkdir(parents=True, exist_ok=True)
+            # Generate or use provided run name
+            provided_run_name = self.config.get("run_name")
+            if provided_run_name is None:
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                # Create a compact model size identifier based on parameter count
+                model_size_info = self.model.get_model_size()
+                total_params = model_size_info["total_parameters"]
+                if total_params < 8_000_000:
+                    size_suffix = "small"
+                elif total_params < 150_000_000:
+                    size_suffix = "base"
+                else:
+                    size_suffix = "large"
+                provided_run_name = f"{timestamp}-{size_suffix}"
+            self.tb_log_dir = base_log_dir / provided_run_name
+            self.tb_log_dir.mkdir(parents=True, exist_ok=True)
+            self.tb_writer = SummaryWriter(log_dir=str(self.tb_log_dir))
+            # Persist hyperparameters snapshot early for convenience
+            try:
+                hparams_snapshot = {
+                    "run_name": provided_run_name,
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "device": str(self.device),
+                    "learning_rate": self.config.get("learning_rate"),
+                    "weight_decay": self.config.get("weight_decay"),
+                    "warmup_steps": self.config.get("warmup_steps"),
+                    "scheduler_type": str(self.config.get("scheduler_type")),
+                    "mixed_precision": bool(self.config.get("mixed_precision", True)),
+                    "gradient_clip": self.config.get("gradient_clip"),
+                    "batch_size": self.config.get("batch_size"),
+                    "enable_curriculum": bool(
+                        self.config.get("enable_curriculum", False)
+                    ),
+                    "train_dataset_size": (
+                        len(self.train_dataloader.dataset)
+                        if hasattr(self.train_dataloader, "dataset")
+                        else None
+                    ),
+                    "val_dataset_size": (
+                        len(self.val_dataloader.dataset)
+                        if (
+                            self.val_dataloader is not None
+                            and hasattr(self.val_dataloader, "dataset")
+                        )
+                        else None
+                    ),
+                    "model_total_parameters": self.model.get_model_size().get(
+                        "total_parameters"
+                    ),
+                }
+                with open(self.tb_log_dir / "hparams.json", "w") as f:
+                    json.dump(hparams_snapshot, f, indent=2)
+                self.logger.info(f"TensorBoard logging to {self.tb_log_dir}")
+            except Exception as e:
+                self.logger.warning(f"Failed to write hparams.json: {e}")
 
         # Checkpointing
         self.checkpoint_dir = Path(self.config.get("checkpoint_dir", "checkpoints"))
@@ -235,6 +302,15 @@ class BIFROSTTrainer:
 
         self.stats.update(loss.item(), loss_components, lr, batch_time)
 
+        # TensorBoard step logging
+        if self.tb_writer is not None:
+            global_step = self.stats.step
+            self.tb_writer.add_scalar("train/loss", loss.item(), global_step)
+            self.tb_writer.add_scalar("train/lr", lr, global_step)
+            self.tb_writer.add_scalar("train/batch_time", batch_time, global_step)
+            for comp_key, comp_val in loss_components.items():
+                self.tb_writer.add_scalar(f"train/{comp_key}", comp_val, global_step)
+
         return {
             "loss": loss.item(),
             "lr": lr,
@@ -285,6 +361,25 @@ class BIFROSTTrainer:
             f"Time: {epoch_time:.2f}s"
         )
 
+        # TensorBoard epoch logging
+        if self.tb_writer is not None and epoch_summary:
+            epoch_index = epoch + 1
+            self.tb_writer.add_scalar(
+                "epoch/avg_loss", epoch_summary.get("avg_loss", 0.0), epoch_index
+            )
+            self.tb_writer.add_scalar(
+                "epoch/min_loss", epoch_summary.get("min_loss", 0.0), epoch_index
+            )
+            self.tb_writer.add_scalar(
+                "epoch/max_loss", epoch_summary.get("max_loss", 0.0), epoch_index
+            )
+            self.tb_writer.add_scalar(
+                "epoch/avg_lr", epoch_summary.get("avg_lr", 0.0), epoch_index
+            )
+            component_avgs = epoch_summary.get("component_avgs", {})
+            for comp_key, comp_val in component_avgs.items():
+                self.tb_writer.add_scalar(f"epoch/{comp_key}", comp_val, epoch_index)
+
         return epoch_summary
 
     def validate(self) -> Dict[str, float]:
@@ -310,7 +405,7 @@ class BIFROSTTrainer:
                 }
 
                 # Forward pass
-                with torch.cuda.amp.autocast(enabled=self.gradient_scaler.enabled):
+                with torch.amp.autocast("cuda", enabled=self.gradient_scaler.enabled):
                     loss, _ = self.model.compute_loss(
                         batch["input_tokens"],
                         batch["target_tokens"],
@@ -324,6 +419,13 @@ class BIFROSTTrainer:
         avg_loss = total_loss / num_batches if num_batches > 0 else 0
 
         self.logger.info(f"Validation Loss: {avg_loss:.4f}")
+        # TensorBoard validation logging
+        if self.tb_writer is not None:
+            # Use current epoch as x-axis if available, else global step
+            step_or_epoch = (
+                self.stats.epoch if self.stats.epoch > 0 else self.stats.step
+            )
+            self.tb_writer.add_scalar("val/loss", avg_loss, step_or_epoch)
         return {"val_loss": avg_loss}
 
     def save_checkpoint(self, epoch: int, metrics: Dict[str, float]):
@@ -450,6 +552,35 @@ class BIFROSTTrainer:
             training_results["final_stats"] = self.stats.get_training_summary()
 
             self.logger.info("Training completed successfully!")
+
+            # TensorBoard: log hparams and close
+            if self.tb_writer is not None:
+                hparams = {
+                    "learning_rate": self.config.get("learning_rate"),
+                    "weight_decay": self.config.get("weight_decay"),
+                    "warmup_steps": self.config.get("warmup_steps"),
+                    "scheduler_type": str(self.config.get("scheduler_type")),
+                    "mixed_precision": bool(self.config.get("mixed_precision", True)),
+                    "gradient_clip": self.config.get("gradient_clip"),
+                    "batch_size": self.config.get("batch_size"),
+                    "enable_curriculum": bool(
+                        self.config.get("enable_curriculum", False)
+                    ),
+                }
+                final_metrics = {}
+                overall = training_results.get("final_stats", {}).get(
+                    "overall_stats", {}
+                )
+                if overall:
+                    final_metrics = {
+                        "hparam/final_loss": overall.get("final_loss", 0.0),
+                        "hparam/avg_loss": overall.get("avg_loss", 0.0),
+                    }
+                self.tb_writer.add_hparams(
+                    hparam_dict=hparams, metric_dict=final_metrics
+                )
+                self.tb_writer.flush()
+                self.tb_writer.close()
 
         except KeyboardInterrupt:
             self.logger.info("Training interrupted by user")

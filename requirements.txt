@@ -3,6 +3,7 @@
 torch>=2.0.0
 numpy>=1.21.0
 typing-extensions>=4.0.0
+tensorboard>=2.9.0
 
 # Optional: Materials science libraries
 # Uncomment if you need materials science functionality

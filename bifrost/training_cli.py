@@ -136,6 +136,24 @@ Examples:
         default="checkpoints",
         help="Directory to save checkpoints (default: checkpoints)",
     )
+    # TensorBoard
+    parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="Enable TensorBoard logging",
+    )
+    parser.add_argument(
+        "--tensorboard-log-dir",
+        type=str,
+        default=None,
+        help="TensorBoard log directory (default: runs/bifrost)",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Optional run name for TensorBoard subdirectory",
+    )
     parser.add_argument(
         "--resume",
         type=str,
@@ -202,6 +220,13 @@ def _merge_training_overrides(
         cfg["mixed_precision"] = False
     cfg["log_interval"] = args.log_interval
     cfg["checkpoint_dir"] = args.checkpoint_dir
+    # TensorBoard settings
+    if args.tensorboard:
+        cfg["tensorboard"] = True
+    if args.tensorboard_log_dir is not None:
+        cfg["tensorboard_log_dir"] = args.tensorboard_log_dir
+    if args.run_name is not None:
+        cfg["run_name"] = args.run_name
     return cfg
 
 
@@ -269,7 +294,11 @@ def main():
         else None
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
 
     # Dataloaders
     train_loader = create_dataloader(

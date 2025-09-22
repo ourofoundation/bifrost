@@ -32,6 +32,9 @@ DEFAULT_TRAINING_CONFIG = {
     "log_interval": 100,
     "enable_curriculum": False,
     "checkpoint_dir": "checkpoints",
+    # TensorBoard
+    "tensorboard": False,
+    "tensorboard_log_dir": "runs/bifrost",
 }
 
 DEFAULT_GENERATION_CONFIG = {
