@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import random
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
+import logging
 
 
 class CrystalStructureDataset(Dataset):
@@ -47,11 +48,18 @@ class CrystalStructureDataset(Dataset):
         self.property_removal = property_removal
         self.curriculum_level = curriculum_level
 
+        # Logger (configured by application)
+        self.logger = logging.getLogger(__name__)
+
         # Drop structures that contain invalid space-group/Wyckoff combinations
         self.data = self._filter_invalid_wyckoff(data)
 
         # Apply curriculum filtering
         self.data = self._apply_curriculum_filtering(self.data)
+
+    def setup_logging(self):
+        """Deprecated: logger configured by application."""
+        self.logger = logging.getLogger(__name__)
 
     def _filter_invalid_wyckoff(
         self, data: List[Dict[str, Any]]
@@ -81,7 +89,9 @@ class CrystalStructureDataset(Dataset):
                 filtered.append(structure)
             else:
                 removed.append(structure)
-        print(f"Removed {len(removed)} structures due to invalid Wyckoff positions")
+        self.logger.info(
+            f"Removed {len(removed)} structures due to invalid Wyckoff positions"
+        )
         return filtered
 
     def _apply_curriculum_filtering(

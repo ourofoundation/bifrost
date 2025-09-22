@@ -69,7 +69,7 @@ exclude = ["tests*", "docs*", "examples*"]
 
 # Entry points
 [project.scripts]
-bifrost-train = "bifrost.train_test:main"
+bifrost-train = "bifrost.training_cli:main"
 bifrost-generate = "bifrost.generation_cli:main"
 bifrost-generate-vocab = "bifrost.data.generate_wyckoff_data:main"
 # Core dependencies

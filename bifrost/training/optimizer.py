@@ -11,6 +11,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR, LinearLR
 from typing import Dict, Any, Optional, Union, List
 import math
+import logging
 
 
 class BIFROSTOptimizer:
@@ -48,6 +49,9 @@ class BIFROSTOptimizer:
         self.total_steps = total_steps
         self.scheduler_type = scheduler_type
 
+        # Logger (configured by caller/CLI or trainer)
+        self.setup_logging()
+
         # Create parameter groups with different weight decay
         self.param_groups = self._create_parameter_groups()
 
@@ -56,6 +60,10 @@ class BIFROSTOptimizer:
 
         # Create learning rate scheduler
         self.scheduler = self._create_scheduler()
+
+    def setup_logging(self):
+        """Initialize module logger; configuration is handled by the application."""
+        self.logger = logging.getLogger(__name__)
 
     def _create_parameter_groups(self) -> List[Dict[str, Any]]:
         """
@@ -110,11 +118,24 @@ class BIFROSTOptimizer:
             Configured learning rate scheduler
         """
         if self.scheduler_type == "one_cycle":
+            # Ensure valid total steps and warmup ratio even for short runs
+            total_steps = max(2, int(self.total_steps))
+            warmup_steps = int(self.warmup_steps)
+            # Clamp warmup_steps to be within [1, total_steps - 1]
+            warmup_steps = max(1, min(warmup_steps, total_steps - 1))
+            warmup_pct = warmup_steps / float(total_steps)
+            # Torch expects 0 < pct_start < 1
+            warmup_pct = max(1.0 / total_steps, min(0.9, warmup_pct))
+
+            self.logger.info(f"Total steps: {total_steps}")
+            self.logger.info(f"Warmup steps: {warmup_steps}")
+            self.logger.info(f"Warmup percentage: {warmup_pct}")
+
             return OneCycleLR(
                 self.optimizer,
                 max_lr=self.learning_rate,
-                total_steps=self.total_steps,
-                pct_start=self.warmup_steps / self.total_steps,
+                total_steps=total_steps,
+                pct_start=warmup_pct,
                 anneal_strategy="cos",
                 div_factor=25.0,  # initial_lr = max_lr / div_factor
                 final_div_factor=1.0,
