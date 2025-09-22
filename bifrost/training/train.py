@@ -206,7 +206,7 @@ class BIFROSTTrainer:
         self.optimizer.zero_grad()
 
         # Forward pass with mixed precision
-        with torch.cuda.amp.autocast(enabled=self.gradient_scaler.enabled):
+        with torch.amp.autocast("cuda", enabled=self.gradient_scaler.enabled):
             loss, loss_components = self.model.compute_loss(
                 batch["input_tokens"],
                 batch["target_tokens"],

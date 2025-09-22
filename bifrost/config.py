@@ -22,9 +22,9 @@ DEFAULT_MODEL_CONFIG = {
 }
 
 DEFAULT_TRAINING_CONFIG = {
-    "learning_rate": 3e-3,
+    "learning_rate": 3e-4,
     "weight_decay": 0.01,
-    "warmup_steps": 1000,
+    "warmup_steps": 10000,
     "scheduler_type": "one_cycle",
     "mixed_precision": False,
     "gradient_clip": 1.0,
@@ -84,8 +84,8 @@ TRAINING_PRESETS = {
         "learning_rate": 1e-4,
         "batch_size": 128,
         "warmup_steps": 20000,
-        "mixed_precision": True,
-        "enable_curriculum": True,
+        "mixed_precision": False,
+        "enable_curriculum": False,
     },
 }
 

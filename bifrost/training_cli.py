@@ -12,7 +12,7 @@ import os
 import sys
 import logging
 from typing import Any, Dict, Optional
-
+import torch
 from .config import create_model_config, create_training_config
 from .model import create_bifrost_model
 from .data.tokenizer import tokenizer
@@ -269,13 +269,15 @@ def main():
         else None
     )
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # Dataloaders
     train_loader = create_dataloader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=device.type == "cuda",  # only if using GPU
     )
     val_loader = (
         create_dataloader(
@@ -283,7 +285,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=max(1, args.num_workers // 2),
-            pin_memory=True,
+            pin_memory=device.type == "cuda",  # only if using GPU
         )
         if val_dataset is not None
         else None
