@@ -6,6 +6,8 @@ cd /Users/mmoderwell/ouro/bifrost && bifrost-generate --properties '{"band_gap":
 
 cd /Users/mmoderwell/ouro/bifrost && python bifrost/data/mp/generate_mp_dataset.py --api_key FsSFsoEfqi6J37fuRe8McMTiLyOWoVrS --max_structures 100 --output mp_dataset.json
 
+cd /Users/mmoderwell/ouro/bifrost && python bifrost/data/mp/generate_mp_dataset.py --api_key FsSFsoEfqi6J37fuRe8McMTiLyOWoVrS --max_structures 1000000 --output mp_dataset_large.json
+
 
 
 bifrost-train --model-size small --epochs 2 --batch-size 8

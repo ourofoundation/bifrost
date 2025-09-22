@@ -178,7 +178,7 @@ class BIFROSTTrainer:
         self.tb_writer: Optional[SummaryWriter] = None
         self.tb_log_dir: Optional[Path] = None
         if self.config.get("tensorboard", False):
-            base_log_dir = Path(self.config.get("tensorboard_log_dir", "runs/bifrost"))
+            base_log_dir = Path(self.config.get("tensorboard_log_dir", "runs/"))
             base_log_dir.mkdir(parents=True, exist_ok=True)
             # Generate or use provided run name
             provided_run_name = self.config.get("run_name")

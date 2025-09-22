@@ -297,13 +297,35 @@ def _fetch_documents(
                 "num_chunks": num_chunks,
                 "chunk_size": chunk_size,
             }
-            # Use material IDs from thermo data
-            search_kwargs["material_ids"] = material_ids
 
-            for doc in mpr.materials.summary.search(**search_kwargs):
-                docs.append(doc)
-                if len(docs) >= max_structures:
-                    break
+            # If we have a small number of IDs, pass them directly; otherwise, omit the ID
+            # filter to avoid the mp_api validate_ids limit and filter locally instead.
+            MAX_IDS_PER_QUERY = 1000
+            use_id_filter = (
+                len(material_ids) > 0 and len(material_ids) <= MAX_IDS_PER_QUERY
+            )
+            if use_id_filter:
+                search_kwargs["material_ids"] = material_ids
+                for doc in mpr.materials.summary.search(**search_kwargs):
+                    docs.append(doc)
+                    if len(docs) >= max_structures:
+                        break
+            else:
+                if len(material_ids) > MAX_IDS_PER_QUERY:
+                    print(
+                        f"material_ids list too long ({len(material_ids)}). Streaming without ID filter and filtering locally."
+                    )
+                # Stream results and filter locally if we have a thermo ID set
+                thermo_id_set = set(material_ids)
+                for doc in mpr.materials.summary.search(**search_kwargs):
+                    if (
+                        thermo_id_set
+                        and getattr(doc, "material_id", None) not in thermo_id_set
+                    ):
+                        continue
+                    docs.append(doc)
+                    if len(docs) >= max_structures:
+                        break
 
         print(f"Fetched {len(docs)} total documents")
 

@@ -134,7 +134,7 @@ Examples:
         "--checkpoint-dir",
         type=str,
         default="checkpoints",
-        help="Directory to save checkpoints (default: checkpoints)",
+        help="Directory to save checkpoints (default: checkpoints/)",
     )
     # TensorBoard
     parser.add_argument(
@@ -146,7 +146,7 @@ Examples:
         "--tensorboard-log-dir",
         type=str,
         default=None,
-        help="TensorBoard log directory (default: runs/bifrost)",
+        help="TensorBoard log directory (default: runs/)",
     )
     parser.add_argument(
         "--run-name",

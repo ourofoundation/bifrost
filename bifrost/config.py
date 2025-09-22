@@ -34,7 +34,7 @@ DEFAULT_TRAINING_CONFIG = {
     "checkpoint_dir": "checkpoints",
     # TensorBoard
     "tensorboard": False,
-    "tensorboard_log_dir": "runs/bifrost",
+    "tensorboard_log_dir": "runs",
 }
 
 DEFAULT_GENERATION_CONFIG = {
