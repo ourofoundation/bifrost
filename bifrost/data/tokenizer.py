@@ -298,9 +298,9 @@ class BIFROSTTokenizer:
             tokens.extend(prop_tokens[0])
             token_types.extend(prop_tokens[1])
 
-        # Add separator
+        # Add separator (treat as PROPERTY/DISCRETE type)
         tokens.append(self.vocab["SEP"])
-        token_types.append(0)  # discrete
+        token_types.append(self.token_types["PROPERTY"])  # 0
 
         # Add composition
         comp_tokens = self._encode_composition(structure_data["composition"])
@@ -326,7 +326,7 @@ class BIFROSTTokenizer:
 
         # Add end of sequence
         tokens.append(self.vocab["EOS"])
-        token_types.append(0)  # discrete
+        token_types.append(self.token_types["PROPERTY"])  # treat EOS as discrete type
 
         return tokens, token_types
 
@@ -345,7 +345,7 @@ class BIFROSTTokenizer:
         for prop_name in sorted(discretized.keys()):
             prop_token = discretized[prop_name]
             tokens.append(self.vocab.get(prop_token, self.vocab["UNK"]))
-            token_types.append(0)  # discrete
+            token_types.append(self.token_types["PROPERTY"])  # 0
 
         return tokens, token_types
 
@@ -359,19 +359,21 @@ class BIFROSTTokenizer:
         for element, count in composition:
             # Element token
             tokens.append(self.vocab.get(element, self.vocab["UNK"]))
-            token_types.append(0)  # discrete
+            token_types.append(self.token_types["ELEMENT"])  # 1
 
             # Count token
             count_token = f"COUNT_{count}"
             tokens.append(self.vocab.get(count_token, self.vocab["UNK"]))
-            token_types.append(0)  # discrete
+            token_types.append(self.token_types["COUNT"])  # 2
 
         return tokens, token_types
 
     def _encode_space_group(self, space_group: int) -> Tuple[List[int], List[int]]:
         """Encode space group."""
         sg_token = f"SPACE_{space_group}"
-        return [self.vocab.get(sg_token, self.vocab["UNK"])], [0]
+        return [self.vocab.get(sg_token, self.vocab["UNK"])], [
+            self.token_types["SPACEGROUP"]
+        ]
 
     def _encode_wyckoff_positions(
         self, wyckoff_positions: List[Dict], space_group: int
@@ -394,18 +396,18 @@ class BIFROSTTokenizer:
 
             wyck_token = f"WYCK_{orbit_id}"
             tokens.append(self.vocab.get(wyck_token, self.vocab["UNK"]))
-            token_types.append(0)  # discrete
+            token_types.append(self.token_types["WYCKOFF"])  # 4
 
             # Element token
             element = pos["element"]
             tokens.append(self.vocab.get(element, self.vocab["UNK"]))
-            token_types.append(0)  # discrete
+            token_types.append(self.token_types["ELEMENT"])  # 1
 
             # Coordinates (x, y, z)
             coords = pos["coordinates"]
             for coord in coords:
                 tokens.append(coord)  # continuous value
-                token_types.append(1)  # continuous
+                token_types.append(self.token_types["COORDINATE"])  # 5
 
         return tokens, token_types
 
@@ -450,13 +452,13 @@ class BIFROSTTokenizer:
         for param in ["a", "b", "c"]:
             if param in lattice:
                 tokens.append(lattice[param])  # continuous value
-                token_types.append(1)  # continuous
+                token_types.append(self.token_types["LATTICE"])  # 6
 
         # Angles: alpha, beta, gamma
         for param in ["alpha", "beta", "gamma"]:
             if param in lattice:
                 tokens.append(lattice[param])  # continuous value
-                token_types.append(1)  # continuous
+                token_types.append(self.token_types["LATTICE"])  # 6
 
         return tokens, token_types
 
@@ -476,7 +478,9 @@ class BIFROSTTokenizer:
         Returns:
             Parsed structure dictionary or None if decoding fails.
         """
-        # Remove special tokens and padding
+        # Keep a raw copy to locate EOS boundary for lattice parsing
+        raw_tokens = np.array(tokens)
+        # Remove special tokens and padding for main parsing
         tokens, token_types = self._clean_sequence(tokens, token_types)
 
         if len(tokens) == 0:
@@ -499,6 +503,7 @@ class BIFROSTTokenizer:
 
         i = 0
         last_wyck: Optional[str] = None
+        encountered_space_group: bool = False
         while i < len(tokens):
             raw = tokens[i]
             if is_continuous_value(raw):
@@ -513,10 +518,15 @@ class BIFROSTTokenizer:
                     structure["space_group"] = int(tname.split("_")[1])
                 except Exception:
                     pass
+                encountered_space_group = True
                 i += 1
                 continue
 
-            if tname.startswith("COUNT_") and structure["composition"]:
+            if (
+                not encountered_space_group
+                and tname.startswith("COUNT_")
+                and structure["composition"]
+            ):
                 try:
                     count = int(tname.split("_")[1])
                     elem, _ = structure["composition"][-1]
@@ -552,7 +562,8 @@ class BIFROSTTokenizer:
 
             # Element symbols are alphabetic, length <= 2
             if (
-                tname.isalpha()
+                not encountered_space_group
+                and tname.isalpha()
                 and len(tname) <= 2
                 and len(structure["composition"]) < max_elements
             ):
@@ -562,12 +573,23 @@ class BIFROSTTokenizer:
 
             i += 1
 
-        # Lattice: last 6 continuous as a,b,c,alpha,beta,gamma
-        cont_vals = [
-            self._decode_continuous_token(v) for v in tokens if is_continuous_value(v)
-        ]
-        if len(cont_vals) >= 6:
-            a, b, c, alpha, beta, gamma = cont_vals[-6:]
+        # Lattice: take the last 6 continuous values BEFORE the first EOS token
+        try:
+            eos_id = self.special_tokens["EOS"]
+            eos_indices = np.where(raw_tokens == eos_id)[0]
+            cutoff_idx = (
+                int(eos_indices[0]) if len(eos_indices) > 0 else len(raw_tokens)
+            )
+        except Exception:
+            cutoff_idx = len(raw_tokens)
+
+        cont_vals_window: List[float] = []
+        for v in raw_tokens[:cutoff_idx]:
+            if is_continuous_value(v):
+                cont_vals_window.append(self._decode_continuous_token(v))
+
+        if len(cont_vals_window) >= 6:
+            a, b, c, alpha, beta, gamma = cont_vals_window[-6:]
             structure["lattice"] = {
                 "a": float(a),
                 "b": float(b),

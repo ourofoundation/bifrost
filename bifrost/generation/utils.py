@@ -238,10 +238,97 @@ def save_structures(
     elif format.lower() == "yaml":
         with open(output_path, "w") as f:
             yaml.dump(structures, f, default_flow_style=False)
+    elif format.lower() == "cif":
+        # Prefer robust CIF writing via pymatgen
+        try:
+            from pymatgen.core import Lattice, Structure as PMGStructure
+            from pymatgen.io.cif import CifWriter
+        except Exception as e:
+            raise ImportError(
+                "pymatgen is required for CIF export. Install with `pip install pymatgen`."
+            ) from e
+
+        def _pmg_structure_from_dict(s: Dict[str, Any]) -> PMGStructure:
+            lattice_dict = s.get("lattice", {})
+            a = float(lattice_dict.get("a", 1.0))
+            b = float(lattice_dict.get("b", 1.0))
+            c = float(lattice_dict.get("c", 1.0))
+            alpha = float(lattice_dict.get("alpha", 90.0))
+            beta = float(lattice_dict.get("beta", 90.0))
+            gamma = float(lattice_dict.get("gamma", 90.0))
+            lattice = Lattice.from_parameters(a, b, c, alpha, beta, gamma)
+
+            wyckoffs = s.get("wyckoff_positions", [])
+            if not wyckoffs:
+                raise ValueError(
+                    "Cannot write CIF: structure has no atomic positions (wyckoff_positions)."
+                )
+
+            species: List[str] = []
+            frac_coords: List[List[float]] = []
+            for pos in wyckoffs:
+                elem = pos.get("element")
+                coords = pos.get("coordinates", [0.0, 0.0, 0.0])
+                if elem is None or len(coords) < 3:
+                    continue
+                x, y, z = float(coords[0]), float(coords[1]), float(coords[2])
+                # Ensure fractional range [0,1)
+                x = x % 1.0
+                y = y % 1.0
+                z = z % 1.0
+                species.append(str(elem))
+                frac_coords.append([x, y, z])
+
+            if not species:
+                raise ValueError(
+                    "Cannot write CIF: no valid atomic sites parsed from wyckoff_positions."
+                )
+
+            pmg_struct = PMGStructure(
+                lattice, species, frac_coords, coords_are_cartesian=False
+            )
+            return pmg_struct
+
+        def _write_single(target_path: Path, s: Dict[str, Any]) -> None:
+            pmg_struct = _pmg_structure_from_dict(s)
+            writer = CifWriter(pmg_struct)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            writer.write_file(str(target_path))
+
+        # Determine output strategy
+        if len(structures) == 0:
+            print("✓ Saved 0 structures to", output_path)
+        elif len(structures) == 1:
+            target = output_path
+            if target.suffix.lower() != ".cif":
+                target = target.with_suffix(".cif")
+            _write_single(target, structures[0])
+            print(f"✓ Saved 1 structure to {target}")
+        else:
+            if output_path.suffix and output_path.suffix.lower() == ".cif":
+                base_dir = output_path.parent
+                base_name = output_path.stem
+            elif output_path.is_dir() or (not output_path.suffix):
+                base_dir = output_path
+                base_name = output_path.stem or "structure"
+            else:
+                base_dir = output_path.parent
+                base_name = output_path.stem or "structure"
+
+            base_dir.mkdir(parents=True, exist_ok=True)
+            written = 0
+            for idx, s in enumerate(structures, 1):
+                sid = s.get("structure_id")
+                filename = f"{base_name}_{idx:03d}.cif" if not sid else f"{sid}.cif"
+                target = base_dir / filename
+                _write_single(target, s)
+                written += 1
+            print(f"✓ Saved {written} structures to {base_dir}")
     else:
         raise ValueError(f"Unsupported format: {format}")
 
-    print(f"✓ Saved {len(structures)} structures to {output_path}")
+    if format.lower() in ("json", "yaml"):
+        print(f"✓ Saved {len(structures)} structures to {output_path}")
 
 
 def load_structures(

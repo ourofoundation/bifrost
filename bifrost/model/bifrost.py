@@ -107,8 +107,8 @@ class BIFROST(nn.Module):
         Returns:
             Tuple of (discrete_logits, continuous_params, type_probs)
         """
-        # Create continuous mask from token types: 1 indicates continuous
-        continuous_mask = token_types == 1
+        # Continuous types are COORDINATE=5 and LATTICE=6
+        continuous_mask = (token_types == 5) | (token_types == 6)
 
         # Generate embeddings
         embeddings = self.embeddings(input_tokens, token_types, continuous_mask)
@@ -117,11 +117,17 @@ class BIFROST(nn.Module):
         seq_len = embeddings.size(1)
         causal_mask = torch.triu(
             torch.ones(seq_len, seq_len, device=embeddings.device), diagonal=1
-        )
-        causal_mask = causal_mask.float().masked_fill(causal_mask == 1, float("-inf"))
+        ).bool()
+
+        # Build key padding mask if attention_mask provided (True indicates to mask out)
+        key_padding_mask = None
+        if attention_mask is not None:
+            key_padding_mask = attention_mask == 0
 
         # Pass through transformer
-        hidden_states = self.transformer(embeddings, mask=causal_mask)
+        hidden_states = self.transformer(
+            embeddings, mask=causal_mask, key_padding_mask=key_padding_mask
+        )
 
         # Generate predictions
         discrete_logits, continuous_params, type_probs = self.heads(hidden_states)
@@ -147,8 +153,8 @@ class BIFROST(nn.Module):
         Returns:
             Tuple of (total_loss, loss_components)
         """
-        # Create continuous mask from token types
-        continuous_mask = token_types == 1
+        # Continuous types are COORDINATE=5 and LATTICE=6
+        continuous_mask = (token_types == 5) | (token_types == 6)
 
         # Generate embeddings
         embeddings = self.embeddings(input_tokens, token_types, continuous_mask)
@@ -157,27 +163,33 @@ class BIFROST(nn.Module):
         seq_len = embeddings.size(1)
         causal_mask = torch.triu(
             torch.ones(seq_len, seq_len, device=embeddings.device), diagonal=1
-        )
-        causal_mask = causal_mask.float().masked_fill(causal_mask == 1, float("-inf"))
+        ).bool()
+
+        # Build key padding mask if attention_mask provided (True indicates to mask out)
+        key_padding_mask = None
+        if attention_mask is not None:
+            key_padding_mask = attention_mask == 0
 
         # Pass through transformer
-        hidden_states = self.transformer(embeddings, mask=causal_mask)
+        hidden_states = self.transformer(
+            embeddings, mask=causal_mask, key_padding_mask=key_padding_mask
+        )
 
         # Generate predictions
         discrete_logits, continuous_params, type_probs = self.heads(hidden_states)
 
         # Derive target types by shifting input token types by one position
-        target_types = torch.zeros_like(token_types)
-        target_types[:, :-1] = token_types[:, 1:]
-        # Create continuous mask for targets from derived target types
-        target_continuous_mask = target_types == 1
+        shifted_types = torch.zeros_like(token_types)
+        shifted_types[:, :-1] = token_types[:, 1:]
+        # Create binary continuous mask targets (1 if coordinate or lattice)
+        target_continuous_mask = (shifted_types == 5) | (shifted_types == 6)
 
         # Compute loss using heads
         # Note: pass attention_mask to mask out padding in all loss terms
         total_loss, discrete_loss, continuous_loss, type_loss = self.heads.compute_loss(
             hidden_states,
             target_tokens,
-            target_types.float(),
+            shifted_types,
             target_continuous_mask,
             attention_mask=attention_mask,
         )
@@ -219,8 +231,8 @@ class BIFROST(nn.Module):
             Tuple of (generated_tokens, generated_types)
         """
         if eos_token_id is None:
-            # Use EOS token from vocabulary (assumed to be vocab_size - 1)
-            eos_token_id = self.vocab_size - 1
+            # Default to known EOS id (4) if tokenizer not provided upstream
+            eos_token_id = 4
 
         batch_size = prefix_tokens.size(0)
         device = prefix_tokens.device
@@ -235,42 +247,34 @@ class BIFROST(nn.Module):
 
             # Forward pass on current sequence to get hidden states
             # (reuse internal forward pieces to avoid running heads twice)
-            # Create continuous mask from token types
-            cont_mask = generated_types == 1
+            # Create continuous mask from token types (5=coord, 6=lattice)
+            cont_mask = (generated_types == 5) | (generated_types == 6)
             embeddings = self.embeddings(generated_tokens, generated_types, cont_mask)
             seq_len = embeddings.size(1)
             causal_mask = torch.triu(
                 torch.ones(seq_len, seq_len, device=embeddings.device), diagonal=1
-            )
-            causal_mask = causal_mask.float().masked_fill(
-                causal_mask == 1, float("-inf")
-            )
+            ).bool()
             hidden_states = self.transformer(embeddings, mask=causal_mask)
 
             # Get head outputs
-            discrete_logits, continuous_params, type_probs = self.heads(hidden_states)
+            discrete_logits, continuous_params, type_logits = self.heads(hidden_states)
 
             # Predict next token from outputs
-            next_token, is_discrete = self.heads.predict_next_token_from_outputs(
+            next_token, predicted_types = self.heads.predict_next_token_from_outputs(
                 discrete_logits,
                 continuous_params,
-                type_probs,
+                type_logits,
                 temperature,
                 top_k,
                 top_p,
             )
-
-            # Convert to appropriate format (elementwise masks)
-            # Ensure generated token types follow convention: 0 = discrete, 1 = continuous
-            token_type = torch.zeros_like(is_discrete, dtype=torch.long)
-            token_type[~is_discrete] = 1
 
             # Append to generated sequence
             generated_tokens = torch.cat(
                 [generated_tokens, next_token.unsqueeze(1)], dim=1
             )
             generated_types = torch.cat(
-                [generated_types, token_type.unsqueeze(1)], dim=1
+                [generated_types, predicted_types.unsqueeze(1)], dim=1
             )
 
             # Check for EOS token

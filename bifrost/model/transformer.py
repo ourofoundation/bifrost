@@ -52,6 +52,7 @@ class MultiHeadAttention(nn.Module):
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
         is_causal: bool = True,
     ) -> torch.Tensor:
         """
@@ -67,7 +68,12 @@ class MultiHeadAttention(nn.Module):
         """
         # Use PyTorch's built-in multi-head attention
         attn_output, _ = self.attention(
-            query=x, key=x, value=x, attn_mask=mask, is_causal=is_causal
+            query=x,
+            key=x,
+            value=x,
+            attn_mask=mask,
+            key_padding_mask=key_padding_mask,
+            is_causal=is_causal,
         )
 
         return self.dropout(attn_output)
@@ -150,7 +156,10 @@ class TransformerBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through transformer block.
@@ -163,7 +172,9 @@ class TransformerBlock(nn.Module):
             Output tensor (batch_size, seq_len, d_model)
         """
         # Multi-head attention with residual connection and layer norm
-        attn_output = self.attention(x, mask=mask, is_causal=False)
+        attn_output = self.attention(
+            x, mask=mask, key_padding_mask=key_padding_mask, is_causal=False
+        )
         x = self.attention_norm(x + self.dropout(attn_output))
 
         # Feed-forward network with residual connection and layer norm
@@ -217,7 +228,10 @@ class BIFROSTTransformer(nn.Module):
         self.max_seq_len = max_seq_len
 
     def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through transformer stack.
@@ -231,7 +245,7 @@ class BIFROSTTransformer(nn.Module):
         """
         # Pass through each transformer block
         for block in self.blocks:
-            x = block(x, mask=mask)
+            x = block(x, mask=mask, key_padding_mask=key_padding_mask)
 
         # Apply final layer normalization
         x = self.final_norm(x)
@@ -269,12 +283,7 @@ def create_causal_mask(seq_len: int, device: torch.device = None) -> torch.Tenso
     Returns:
         Causal mask (seq_len, seq_len) where upper triangle is -inf
     """
-    mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1)
-    if device is not None:
-        mask = mask.to(device)
-
-    # Convert to float and set upper triangle to -inf
-    mask = mask.float().masked_fill(mask == 1, float("-inf"))
+    mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
     return mask
 
 

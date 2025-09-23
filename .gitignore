@@ -210,3 +210,6 @@ __marimo__/
 # Bifrost
 checkpoints/
 runs/
+
+mp_dataset_large.json
+*.cif

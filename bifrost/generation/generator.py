@@ -59,7 +59,11 @@ class BIFROSTGenerator:
         if model_path:
             self.load_checkpoint(model_path)
 
-        # Decoding handled by tokenizer now
+        # Configure type-conditioned vocab mask for decoding
+        try:
+            self._configure_type_token_mask()
+        except Exception as e:
+            print(f"Warning: failed to configure type token mask: {e}")
 
         # Get property information
         self.property_bins = get_property_bins()
@@ -67,6 +71,71 @@ class BIFROSTGenerator:
         print(
             f"✓ BIFROST Generator initialized with {self.model.get_num_parameters():,} parameters"
         )
+
+    def _configure_type_token_mask(self) -> None:
+        """Build and set a [7, vocab_size] boolean mask for type-conditioned decoding.
+
+        Rows 0..4 (PROPERTY, ELEMENT, COUNT, SPACEGROUP, WYCKOFF) specify which discrete
+        vocab ids are allowed when that type is predicted. Rows 5..6 (COORDINATE, LATTICE)
+        are not used for discrete sampling and are left all False.
+        """
+        vocab = tokenizer.vocab
+        reverse_vocab = {v: k for k, v in vocab.items()}
+        vocab_size = len(vocab)
+
+        # Precompute property tokens from bins
+        prop_bins = get_property_bins()
+        property_token_names = set()
+        for info in prop_bins.values():
+            for t in info.get("tokens", []):
+                property_token_names.add(t)
+
+        # Build sets by pattern
+        wyck_ids = set()
+        space_ids = set()
+        count_ids = set()
+        property_ids = set()
+        element_ids = set()
+
+        special_ids = set(tokenizer.special_tokens.values())
+
+        for tok_id, name in reverse_vocab.items():
+            if tok_id in special_ids:
+                continue
+            if name.startswith("WYCK_"):
+                wyck_ids.add(tok_id)
+            elif name.startswith("SPACE_"):
+                space_ids.add(tok_id)
+            elif name.startswith("COUNT_"):
+                count_ids.add(tok_id)
+            elif name in property_token_names:
+                property_ids.add(tok_id)
+            else:
+                # Treat all other known discrete tokens as elements
+                element_ids.add(tok_id)
+
+        import torch as _torch
+
+        mask = _torch.zeros(7, vocab_size, dtype=_torch.bool, device=self.device)
+        # PROPERTY=0, ELEMENT=1, COUNT=2, SPACEGROUP=3, WYCKOFF=4
+        if property_ids:
+            mask[0, list(property_ids)] = True
+        if element_ids:
+            mask[1, list(element_ids)] = True
+        if count_ids:
+            mask[2, list(count_ids)] = True
+        if space_ids:
+            mask[3, list(space_ids)] = True
+        if wyck_ids:
+            mask[4, list(wyck_ids)] = True
+
+        # Set on model heads (will be respected during sampling)
+        try:
+            self.model.heads.set_type_token_mask(mask)
+        except Exception:
+            # Backwards compatibility if heads do not implement setter
+            if hasattr(self.model.heads, "type_token_mask"):
+                self.model.heads.type_token_mask = mask
 
     def load_checkpoint(self, checkpoint_path: Union[str, Path]):
         """
@@ -217,6 +286,23 @@ class BIFROSTGenerator:
                     structure = tokenizer.decode_structure(tokens, types)
                     if structure:
                         structure["generated_properties"] = target_properties.copy()
+                        # Attach raw and decoded sequences, including predicted token types
+                        try:
+                            structure["sequence_tokens"] = tokens.tolist()
+                            structure["sequence_types"] = types.astype(int).tolist()
+                            # Human-readable token names for discrete entries
+                            structure["decoded_tokens"] = self.decode_tokens(
+                                tokens.tolist()
+                            )
+                            # Map type ids to names using tokenizer mapping
+                            type_id_to_name = {
+                                v: k for k, v in tokenizer.token_types.items()
+                            }
+                            structure["sequence_type_names"] = [
+                                type_id_to_name.get(int(t), str(int(t))) for t in types
+                            ]
+                        except Exception:
+                            pass
                         generated_structures.append(structure)
                 except Exception as e:
                     print(f"Warning: Failed to decode structure: {e}")
@@ -290,7 +376,21 @@ class BIFROSTGenerator:
             for i in range(current_batch_size):
                 tok = generated_tokens[i].detach().cpu().numpy().tolist()
                 typ = generated_types[i].detach().cpu().numpy().tolist()
-                sequences.append({"tokens": tok, "types": typ})
+                # Also include human-readable names for types and tokens
+                try:
+                    type_id_to_name = {v: k for k, v in tokenizer.token_types.items()}
+                    sequences.append(
+                        {
+                            "tokens": tok,
+                            "types": typ,
+                            "decoded_tokens": self.decode_tokens(tok),
+                            "type_names": [
+                                type_id_to_name.get(int(t), str(int(t))) for t in typ
+                            ],
+                        }
+                    )
+                except Exception:
+                    sequences.append({"tokens": tok, "types": typ})
 
         print(f"✓ Sampled {len(sequences)} sequences")
         return sequences

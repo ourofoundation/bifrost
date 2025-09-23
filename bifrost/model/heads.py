@@ -109,8 +109,12 @@ class ContinuousHead(nn.Module):
         params = self.forward(x)  # (batch_size, seq_len, 2)
         mean, log_var = params.split(1, dim=-1)  # Split into mean and log_var
 
+        # Clamp variance for stability
+        log_var = torch.clamp(log_var, min=-10.0, max=10.0)
+
         # Compute standard deviation
         std = torch.exp(0.5 * log_var)
+        std = torch.clamp(std, min=1e-6)
 
         # Sample from Gaussian: mean + std * epsilon
         epsilon = torch.randn_like(mean)
@@ -121,10 +125,10 @@ class ContinuousHead(nn.Module):
 
 class TokenTypePredictor(nn.Module):
     """
-    Predicts whether next token should be discrete or continuous.
+    Predicts the next token's type among 7 classes.
 
-    This is a binary classifier that helps the model decide whether
-    to use the discrete head or continuous head for the next token.
+    Classes follow the tokenizer mapping:
+    0=PROPERTY, 1=ELEMENT, 2=COUNT, 3=SPACEGROUP, 4=WYCKOFF, 5=COORDINATE, 6=LATTICE.
     """
 
     def __init__(self, d_model: int):
@@ -137,7 +141,9 @@ class TokenTypePredictor(nn.Module):
         super().__init__()
 
         self.predictor = nn.Sequential(
-            nn.Linear(d_model, d_model // 2), nn.ReLU(), nn.Linear(d_model // 2, 1)
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Linear(d_model // 2, 7),
         )
 
         # Initialize weights
@@ -153,10 +159,10 @@ class TokenTypePredictor(nn.Module):
             x: Input tensor (batch_size, seq_len, d_model)
 
         Returns:
-            Probabilities of being discrete token (batch_size, seq_len, 1)
+            Logits over 7 token types (batch_size, seq_len, 7)
         """
         logits = self.predictor(x)  # (batch_size, seq_len, 1)
-        # Return raw logits; callers can apply sigmoid as needed
+        # Return raw logits; callers can apply softmax as needed
         return logits
 
 
@@ -187,6 +193,27 @@ class BIFROSTHeads(nn.Module):
         self.vocab_size = vocab_size
         self.d_model = d_model
 
+        # Optional mask: [7, vocab_size] booleans indicating which discrete tokens
+        # are allowed for each predicted type id (0..6). If None, no masking.
+        self.type_token_mask: Optional[torch.Tensor] = None
+
+        # Loss weighting (defaults can be overridden by trainer)
+        self.w_disc: float = 1.0
+        self.w_cont: float = 1.0
+        self.w_type: float = 1.0
+
+    def set_type_token_mask(self, mask: torch.Tensor):
+        """Set a [7, vocab_size] boolean mask for type-conditioned decoding."""
+        self.type_token_mask = mask.to(next(self.parameters()).device)
+
+    def set_loss_weights(
+        self, w_disc: float = 1.0, w_cont: float = 1.0, w_type: float = 1.0
+    ):
+        """Configure loss term weights for combining total loss."""
+        self.w_disc = float(w_disc)
+        self.w_cont = float(w_cont)
+        self.w_type = float(w_type)
+
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -201,9 +228,9 @@ class BIFROSTHeads(nn.Module):
         """
         discrete_logits = self.discrete_head(x)
         continuous_params = self.continuous_head(x)
-        type_probs = self.token_type_predictor(x)
+        type_logits = self.token_type_predictor(x)
 
-        return discrete_logits, continuous_params, type_probs
+        return discrete_logits, continuous_params, type_logits
 
     def predict_next_token(
         self,
@@ -222,21 +249,19 @@ class BIFROSTHeads(nn.Module):
             top_p: Top-p (nucleus) sampling parameter
 
         Returns:
-            Tuple of (token_id, is_discrete) where token_id is the predicted token
+            Tuple of (token_value, predicted_type_id)
         """
         # Get predictions from all heads
-        discrete_logits, continuous_params, type_probs = self.forward(x)
+        discrete_logits, continuous_params, type_logits = self.forward(x)
 
         # Get the last position predictions (autoregressive)
         discrete_logits = discrete_logits[:, -1]  # (batch_size, vocab_size)
         continuous_params = continuous_params[:, -1]  # (batch_size, 2)
-        type_probs = type_probs[:, -1]  # (batch_size, 1)
+        type_logits = type_logits[:, -1]  # (batch_size, 7)
 
-        # Decide whether to predict discrete or continuous token
-        # Convention: target type 1 = continuous, 0 = discrete
-        # Therefore, probability > 0.5 => continuous; else discrete
-        is_continuous = torch.sigmoid(type_probs).squeeze(-1) > 0.5  # (batch_size,)
-        is_discrete = ~is_continuous
+        # Predict next token type (argmax)
+        predicted_types = torch.argmax(torch.softmax(type_logits, dim=-1), dim=-1)
+        is_discrete = predicted_types <= 4
 
         # Initialize output tensor as float to support continuous values
         batch_size = x.size(0)
@@ -245,7 +270,13 @@ class BIFROSTHeads(nn.Module):
         # Sample discrete tokens
         discrete_mask = is_discrete
         if discrete_mask.any():
-            logits = discrete_logits[discrete_mask] / temperature
+            logits = discrete_logits[discrete_mask] / max(temperature, 1e-6)
+
+            # Apply type-based vocabulary masking if available
+            if self.type_token_mask is not None:
+                t_ids = predicted_types[discrete_mask]
+                masks = self.type_token_mask[t_ids]
+                logits = logits.masked_fill(~masks, float("-inf"))
 
             # Apply top-k filtering if specified
             if top_k is not None:
@@ -287,13 +318,13 @@ class BIFROSTHeads(nn.Module):
             sampled_values = mean + temperature * std * epsilon
             token_ids[continuous_mask] = sampled_values.squeeze(-1)
 
-        return token_ids, is_discrete
+        return token_ids, predicted_types
 
     def predict_next_token_from_outputs(
         self,
         discrete_logits: torch.Tensor,
         continuous_params: torch.Tensor,
-        type_probs: torch.Tensor,
+        type_logits: torch.Tensor,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -305,16 +336,18 @@ class BIFROSTHeads(nn.Module):
             continuous_params: (batch_size, 1, 2)
             type_probs: (batch_size, 1, 1)
         Returns:
-            Tuple of (token_value, is_discrete_mask)
+            Tuple of (token_value, predicted_type_ids)
         """
         # Squeeze last time dimension
         logits = discrete_logits[:, -1]
         params = continuous_params[:, -1]
-        tprobs = type_probs[:, -1]
+        tlogits = type_logits[:, -1]
 
-        # Convention: 1 = continuous target
-        is_continuous = torch.sigmoid(tprobs).squeeze(-1) > 0.5  # (batch,)
-        is_discrete = ~is_continuous
+        # Predict type ids
+        predicted_types = torch.argmax(
+            torch.softmax(tlogits, dim=-1), dim=-1
+        )  # (batch,)
+        is_discrete = predicted_types <= 4
 
         batch_size = logits.size(0)
         token_vals = torch.zeros(batch_size, dtype=torch.float, device=logits.device)
@@ -322,6 +355,12 @@ class BIFROSTHeads(nn.Module):
         # Discrete sampling
         if is_discrete.any():
             dlogits = logits[is_discrete] / max(temperature, 1e-6)
+
+            # Apply type-based vocabulary masking if available
+            if self.type_token_mask is not None:
+                t_ids = predicted_types[is_discrete]
+                masks = self.type_token_mask[t_ids]
+                dlogits = dlogits.masked_fill(~masks, float("-inf"))
             if top_k is not None:
                 thresh = torch.topk(dlogits, min(top_k, dlogits.size(-1)))[0][
                     ..., -1, None
@@ -348,12 +387,13 @@ class BIFROSTHeads(nn.Module):
         # Continuous sampling
         if (~is_discrete).any():
             mean, log_var = params[~is_discrete].split(1, dim=-1)
+            log_var = torch.clamp(log_var, min=-10.0, max=10.0)
             std = torch.exp(0.5 * log_var)
+            std = torch.clamp(std, min=1e-6)
             epsilon = torch.randn_like(mean)
             samples = mean + temperature * std * epsilon
             token_vals[~is_discrete] = samples.squeeze(-1)
-
-        return token_vals, is_discrete
+        return token_vals, predicted_types
 
     def compute_loss(
         self,
@@ -401,6 +441,7 @@ class BIFROSTHeads(nn.Module):
                     discrete_logits_flat[keep_mask],
                     target_tokens_flat[keep_mask],
                     reduction="mean",
+                    label_smoothing=0.1,
                 )
             else:
                 discrete_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -415,8 +456,12 @@ class BIFROSTHeads(nn.Module):
 
             mean, log_var = continuous_params_flat.split(1, dim=-1)
 
-            # Gaussian NLL loss
+            # Clamp for stability
+            log_var = torch.clamp(log_var, min=-10.0, max=10.0)
+
+            # Gaussian NLL loss with variance floor
             var = torch.exp(log_var)
+            var = torch.clamp(var, min=1e-6)
             log_likelihood = -0.5 * (
                 torch.log(2 * torch.pi * var)
                 + (target_tokens_flat.unsqueeze(-1) - mean) ** 2 / var
@@ -425,19 +470,21 @@ class BIFROSTHeads(nn.Module):
         else:
             continuous_loss = torch.tensor(0.0, device=hidden_states.device)
 
-        # Compute token type loss (binary cross-entropy) on valid positions only
-        # target_types: 0 = discrete, 1 = continuous
-        type_logits = type_probs.squeeze(-1)  # (batch, seq)
-        target_type_probs = target_types.float()  # (batch, seq)
-        per_pos_type_loss = F.binary_cross_entropy_with_logits(
-            type_logits, target_type_probs, reduction="none"
-        )
+        # Compute token type loss (cross-entropy over 7 classes) on valid positions only
         if valid_positions.any():
-            type_loss = per_pos_type_loss[valid_positions].mean()
+            type_logits_full = type_probs[valid_positions]  # (num_valid, 7)
+            target_types_flat = target_types[valid_positions].long()  # (num_valid,)
+            type_loss = F.cross_entropy(
+                type_logits_full, target_types_flat, reduction="mean"
+            )
         else:
             type_loss = torch.tensor(0.0, device=hidden_states.device)
 
-        # Combine losses
-        total_loss = discrete_loss + continuous_loss + type_loss
+        # Combine losses with weights
+        total_loss = (
+            self.w_disc * discrete_loss
+            + self.w_cont * continuous_loss
+            + self.w_type * type_loss
+        )
 
         return total_loss, discrete_loss, continuous_loss, type_loss

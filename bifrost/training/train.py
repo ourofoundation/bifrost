@@ -160,6 +160,17 @@ class BIFROSTTrainer:
         # Move model to device
         self.model.to(self.device)
 
+        # Configure loss weights if provided
+        w_disc = self.config.get("w_disc", 1.0)
+        w_cont = self.config.get("w_cont", 1.0)
+        w_type = self.config.get("w_type", 0.2)
+        try:
+            self.model.heads.set_loss_weights(
+                w_disc=w_disc, w_cont=w_cont, w_type=w_type
+            )
+        except Exception:
+            pass
+
         # Set up training components
         self.optimizer = OptimizerFactory.create_optimizer(model, self.config)
         self.gradient_scaler = OptimizerFactory.create_gradient_scaler(self.config)
@@ -170,6 +181,9 @@ class BIFROSTTrainer:
 
         # Training statistics
         self.stats = TrainingStats()
+
+        # Starting epoch offset (set when resuming from checkpoint)
+        self.start_epoch = 0
 
         # Logging setup
         self.setup_logging()
@@ -501,7 +515,9 @@ class BIFROSTTrainer:
         self.stats.lr_history = checkpoint.get("stats", {}).get("lr_history", [])
 
         self.logger.info(f"Checkpoint loaded: {checkpoint_path}")
-        return checkpoint.get("epoch", 0)
+        # Continue training from the next epoch after the checkpoint
+        self.start_epoch = checkpoint.get("epoch", 0)
+        return self.start_epoch
 
     def train(
         self, num_epochs: int, save_interval: int = 10, eval_interval: int = 1
@@ -526,7 +542,9 @@ class BIFROSTTrainer:
         }
 
         try:
-            for epoch in range(num_epochs):
+            for relative_epoch in range(num_epochs):
+                # Compute global epoch index so numbering continues when resuming
+                epoch = self.start_epoch + relative_epoch
                 # Train for one epoch
                 epoch_summary = self.train_epoch(epoch)
 

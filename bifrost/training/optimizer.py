@@ -311,6 +311,10 @@ TRAINING_CONFIGS = {
         "mixed_precision": True,
         "gradient_clip": 1.0,
         "batch_size": 256,
+        # loss weights
+        "w_disc": 1.0,
+        "w_cont": 1.0,
+        "w_type": 0.2,
     },
     "large_scale": {
         "learning_rate": 1e-4,
