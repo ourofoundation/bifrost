@@ -18,6 +18,10 @@ bifrost-train --model-size small --epochs 10 --batch-size 64 --dataset bifrost/d
 bifrost-train --model-size base --epochs 10 --batch-size 64 --dataset bifrost/data/mp/mp_dataset.json --tensorboard
 ```
 
+```bash
+# On Modal with A10G with 24GB VRAM
+!cd /mnt/bifrost-data/bifrost/ && bifrost-train --model-size base --epochs 100 --save-interval 10 --batch-size 512 --warmup-steps 2000 --dataset bifrost/data/mp/mp_dataset_large.json --tensorboard
+
 ### Generation
 
 ```bash
