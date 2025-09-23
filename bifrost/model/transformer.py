@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
+import math
 
 
 class MultiHeadAttention(nn.Module):
@@ -77,6 +78,108 @@ class MultiHeadAttention(nn.Module):
         )
 
         return self.dropout(attn_output)
+
+    # --- Incremental/KV-cache utilities ---
+    def _qkv_from_in_proj(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Project inputs to Q, K, V using the internal MultiheadAttention weights.
+
+        Args:
+            x: (batch, seq, embed_dim)
+
+        Returns:
+            Tuple (q, k, v) each shaped (batch, seq, embed_dim)
+        """
+        mha: nn.MultiheadAttention = self.attention
+        w = mha.in_proj_weight  # (3E, E)
+        b = mha.in_proj_bias  # (3E,)
+        E = self.d_model
+        w_q, w_k, w_v = w[:E, :], w[E : 2 * E, :], w[2 * E :, :]
+        b_q = b[:E] if b is not None else None
+        b_k = b[E : 2 * E] if b is not None else None
+        b_v = b[2 * E :] if b is not None else None
+
+        # x: (B, S, E) -> (B, S, E)
+        q = torch.matmul(x, w_q.T)
+        k = torch.matmul(x, w_k.T)
+        v = torch.matmul(x, w_v.T)
+        if b is not None:
+            q = q + b_q
+            k = k + b_k
+            v = v + b_v
+        return q, k, v
+
+    def compute_kv_cache(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute K,V projections for a full sequence to initialize cache.
+
+        Args:
+            x: (batch, seq, embed_dim)
+
+        Returns:
+            k_cache, v_cache: (batch, n_heads, seq, head_dim)
+        """
+        q, k, v = self._qkv_from_in_proj(x)
+        B, S, E = k.shape
+        H = self.n_heads
+        D = self.head_dim
+        # reshape to heads
+        k = k.view(B, S, H, D).transpose(1, 2)  # (B, H, S, D)
+        v = v.view(B, S, H, D).transpose(1, 2)  # (B, H, S, D)
+        return k, v
+
+    def incremental_step(
+        self,
+        x_t: torch.Tensor,
+        past_k: torch.Tensor,
+        past_v: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute attention output for a single timestep using cached K,V.
+
+        Args:
+            x_t: (batch, 1, embed_dim) current token input
+            past_k: (batch, n_heads, seq, head_dim)
+            past_v: (batch, n_heads, seq, head_dim)
+
+        Returns:
+            attn_out_t: (batch, 1, embed_dim)
+            new_k: (batch, n_heads, seq+1, head_dim)
+            new_v: (batch, n_heads, seq+1, head_dim)
+        """
+        B, S1, E = x_t.shape
+        H = self.n_heads
+        D = self.head_dim
+
+        # Project current step
+        q_t, k_t, v_t = self._qkv_from_in_proj(x_t)  # (B,1,E)
+        # reshape heads
+        q_t = q_t.view(B, S1, H, D).transpose(1, 2)  # (B,H,1,D)
+        k_t = k_t.view(B, S1, H, D).transpose(1, 2)  # (B,H,1,D)
+        v_t = v_t.view(B, S1, H, D).transpose(1, 2)  # (B,H,1,D)
+
+        # Append to cache
+        new_k = torch.cat([past_k, k_t], dim=2) if past_k is not None else k_t
+        new_v = torch.cat([past_v, v_t], dim=2) if past_v is not None else v_t
+
+        # Scaled dot-product attention for single query position
+        # attn_weights: (B,H,1,seq+1)
+        scale = 1.0 / math.sqrt(D)
+        attn_scores = torch.matmul(q_t, new_k.transpose(-2, -1)) * scale
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        # attention output: (B,H,1,D)
+        context = torch.matmul(attn_weights, new_v)
+        # Merge heads -> (B,1,E)
+        context = context.transpose(1, 2).contiguous().view(B, S1, E)
+
+        # Output projection uses MHA's out_proj
+        out = self.attention.out_proj(context)
+        out = self.dropout(out)
+        return out, new_k, new_v
 
 
 class FeedForwardNetwork(nn.Module):
@@ -183,6 +286,31 @@ class TransformerBlock(nn.Module):
 
         return x
 
+    def incremental_forward(
+        self,
+        x_t: torch.Tensor,
+        cache: Tuple[torch.Tensor, torch.Tensor],
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Incremental forward for a single timestep with KV cache.
+
+        Args:
+            x_t: (batch, 1, d_model) input at this layer
+            cache: (k, v) where each is (batch, n_heads, seq, head_dim)
+
+        Returns:
+            y_t: (batch, 1, d_model) output at this layer
+            new_cache: updated (k, v)
+        """
+        k, v = cache
+        attn_out_t, new_k, new_v = self.attention.incremental_step(x_t, k, v)
+        # Residual and norm
+        x_after_attn = self.attention_norm(x_t + self.dropout(attn_out_t))
+        # FFN with residual and norm
+        ffn_out = self.feed_forward(x_after_attn)
+        y_t = self.feed_forward_norm(x_after_attn + self.dropout(ffn_out))
+        return y_t, (new_k, new_v)
+
 
 class BIFROSTTransformer(nn.Module):
     """
@@ -251,6 +379,54 @@ class BIFROSTTransformer(nn.Module):
         x = self.final_norm(x)
 
         return x
+
+    def build_kv_caches(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]:
+        """
+        Run a full forward pass and initialize per-layer KV caches from inputs of each layer.
+
+        Args:
+            x: (batch, seq, d_model)
+        Returns:
+            hidden_states: (batch, seq, d_model)
+            caches: tuple of (k,v) per layer, each (batch, n_heads, seq, head_dim)
+        """
+        caches = []
+        for block in self.blocks:
+            # Build K,V cache from current layer input x
+            k, v = block.attention.compute_kv_cache(x)
+            caches.append((k, v))
+            # Standard forward for this layer
+            x = block(x, mask=mask, key_padding_mask=key_padding_mask)
+        x = self.final_norm(x)
+        return x, tuple(caches)
+
+    def incremental_forward_step(
+        self,
+        x_t: torch.Tensor,
+        caches: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+    ) -> Tuple[torch.Tensor, Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]:
+        """
+        Process a single timestep through all layers using KV caches.
+
+        Args:
+            x_t: (batch, 1, d_model)
+            caches: tuple of (k,v) per layer
+
+        Returns:
+            y_t: (batch, 1, d_model)
+            new_caches: updated caches
+        """
+        new_caches = []
+        for block, kv in zip(self.blocks, caches):
+            x_t, kv = block.incremental_forward(x_t, kv)
+            new_caches.append(kv)
+        y_t = self.final_norm(x_t)
+        return y_t, tuple(new_caches)
 
     def get_attention_weights(
         self, x: torch.Tensor, layer_idx: int = 0

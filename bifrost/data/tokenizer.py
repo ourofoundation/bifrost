@@ -501,79 +501,122 @@ class BIFROSTTokenizer:
             as_int = int(val)
             return abs(val - as_int) > 1e-6 or (as_int not in reverse_vocab)
 
-        i = 0
-        last_wyck: Optional[str] = None
+        # Determine start of structural tokens using SEP if present
+        sep_idx: Optional[int] = None
+        try:
+            sep_token_id = self.vocab.get("SEP")
+            for idx, tok in enumerate(tokens):
+                as_int = int(tok)
+                if abs(tok - as_int) < 1e-6 and as_int == sep_token_id:
+                    sep_idx = idx
+                    break
+        except Exception:
+            sep_idx = None
+
+        i = (sep_idx + 1) if sep_idx is not None else 0
         encountered_space_group: bool = False
+
+        # Parse sequentially by token types without forcing substitutions
         while i < len(tokens):
-            raw = tokens[i]
-            if is_continuous_value(raw):
-                i += 1
-                continue
+            ttype = int(token_types[i]) if i < len(token_types) else -1
+            val = tokens[i]
 
-            tid = int(raw)
-            tname = reverse_vocab.get(tid, "UNK")
-
-            if tname.startswith("SPACE_"):
+            # SPACEGROUP
+            if ttype == self.token_types["SPACEGROUP"]:
                 try:
-                    structure["space_group"] = int(tname.split("_")[1])
-                except Exception:
-                    pass
-                encountered_space_group = True
-                i += 1
-                continue
-
-            if (
-                not encountered_space_group
-                and tname.startswith("COUNT_")
-                and structure["composition"]
-            ):
-                try:
-                    count = int(tname.split("_")[1])
-                    elem, _ = structure["composition"][-1]
-                    structure["composition"][-1] = (elem, count)
+                    name = reverse_vocab.get(int(val), "")
+                    if name.startswith("SPACE_"):
+                        structure["space_group"] = int(name.split("_")[1])
+                        encountered_space_group = True
                 except Exception:
                     pass
                 i += 1
                 continue
 
-            if tname.startswith("WYCK_"):
-                last_wyck = tname.replace("WYCK_", "")
+            # COMPOSITION before SPACEGROUP: ELEMENT optionally followed by COUNT
+            if not encountered_space_group:
+                if ttype == self.token_types["ELEMENT"]:
+                    try:
+                        elem = reverse_vocab.get(int(val), "")
+                        if (
+                            elem
+                            and elem.isalpha()
+                            and len(elem) <= 2
+                            and len(structure["composition"]) < max_elements
+                        ):
+                            structure["composition"].append((elem, 1))
+                            # Optional COUNT follows
+                            if (
+                                i + 1 < len(tokens)
+                                and int(token_types[i + 1]) == self.token_types["COUNT"]
+                            ):
+                                try:
+                                    cnt_name = reverse_vocab.get(
+                                        int(tokens[i + 1]), "COUNT_1"
+                                    )
+                                    cnt = (
+                                        int(cnt_name.split("_")[1])
+                                        if cnt_name.startswith("COUNT_")
+                                        else 1
+                                    )
+                                    structure["composition"][-1] = (elem, cnt)
+                                    i += 2
+                                    continue
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                 i += 1
-                # Expect element + 3 coords
-                if i < len(tokens) and not is_continuous_value(tokens[i]):
-                    elem_name = reverse_vocab.get(int(tokens[i]), "UNK")
+                continue
+
+            # After SPACEGROUP: WYCKOFF -> ELEMENT -> 3 * COORDINATE
+            if ttype == self.token_types["WYCKOFF"]:
+                wyck = ""
+                try:
+                    name = reverse_vocab.get(int(val), "")
+                    if name.startswith("WYCK_"):
+                        wyck = name.replace("WYCK_", "")
+                except Exception:
+                    wyck = ""
+
+                j = i + 1
+                # Require ELEMENT next
+                if (
+                    j < len(tokens)
+                    and int(token_types[j]) == self.token_types["ELEMENT"]
+                ):
+                    elem_name = reverse_vocab.get(int(tokens[j]), None)
+                    k = j + 1
                     coords: List[float] = []
-                    j = i + 1
-                    while j < len(tokens) and len(coords) < 3:
-                        if is_continuous_value(tokens[j]):
-                            coords.append(self._decode_continuous_token(tokens[j]))
-                        j += 1
-                    if elem_name != "UNK" and len(coords) == 3:
+                    for _ in range(3):
+                        if (
+                            k < len(tokens)
+                            and int(token_types[k]) == self.token_types["COORDINATE"]
+                        ):
+                            coords.append(
+                                float(self._decode_continuous_token(tokens[k])) % 1.0
+                            )
+                            k += 1
+                        else:
+                            break
+                    if elem_name and len(coords) == 3 and wyck:
                         structure["wyckoff_positions"].append(
                             {
                                 "element": elem_name,
-                                "wyckoff": last_wyck,
+                                "wyckoff": wyck,
                                 "coordinates": coords,
                             }
                         )
-                    i = j
-                    continue
-                continue
-
-            # Element symbols are alphabetic, length <= 2
-            if (
-                not encountered_space_group
-                and tname.isalpha()
-                and len(tname) <= 2
-                and len(structure["composition"]) < max_elements
-            ):
-                structure["composition"].append((tname, 1))
+                        i = k
+                        continue
+                # If pattern not satisfied fully, advance by one without forcing
                 i += 1
                 continue
 
+            # Default: advance
             i += 1
 
-        # Lattice: take the last 6 continuous values BEFORE the first EOS token
+        # Lattice: take the last 6 LATTICE-typed values BEFORE the first EOS token
         try:
             eos_id = self.special_tokens["EOS"]
             eos_indices = np.where(raw_tokens == eos_id)[0]
@@ -583,13 +626,19 @@ class BIFROSTTokenizer:
         except Exception:
             cutoff_idx = len(raw_tokens)
 
-        cont_vals_window: List[float] = []
-        for v in raw_tokens[:cutoff_idx]:
-            if is_continuous_value(v):
-                cont_vals_window.append(self._decode_continuous_token(v))
+        lattice_vals: List[float] = []
+        # Use token_types to select only LATTICE values up to cutoff
+        for idx in range(min(cutoff_idx, len(token_types))):
+            try:
+                if int(token_types[idx]) == self.token_types["LATTICE"]:
+                    lattice_vals.append(
+                        float(self._decode_continuous_token(raw_tokens[idx]))
+                    )
+            except Exception:
+                continue
 
-        if len(cont_vals_window) >= 6:
-            a, b, c, alpha, beta, gamma = cont_vals_window[-6:]
+        if len(lattice_vals) >= 6:
+            a, b, c, alpha, beta, gamma = lattice_vals[-6:]
             structure["lattice"] = {
                 "a": float(a),
                 "b": float(b),

@@ -129,6 +129,15 @@ class BIFROSTGenerator:
         if wyck_ids:
             mask[4, list(wyck_ids)] = True
 
+        # Always allow EOS to be sampled for any discrete type to enable termination
+        try:
+            eos_id = tokenizer.special_tokens.get("EOS")
+            if eos_id is not None:
+                for t in range(0, 5):  # discrete rows only
+                    mask[t, eos_id] = True
+        except Exception:
+            pass
+
         # Set on model heads (will be respected during sampling)
         try:
             self.model.heads.set_type_token_mask(mask)
@@ -275,6 +284,7 @@ class BIFROSTGenerator:
                     temperature=temperature,
                     top_k=top_k,
                     top_p=top_p,
+                    eos_token_id=tokenizer.special_tokens.get("EOS", 4),
                 )
 
             # Decode each structure in the batch

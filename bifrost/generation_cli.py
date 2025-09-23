@@ -115,16 +115,16 @@ Examples:
     parser.add_argument(
         "--output",
         type=str,
-        default="generated_structures.json",
-        help="Output file path (default: generated_structures.json)",
+        default="generated_structures.cif",
+        help="Output file path (default: generated_structures.cif)",
     )
 
     parser.add_argument(
         "--format",
         type=str,
-        default="json",
-        choices=["json", "yaml"],
-        help="Output format (default: json)",
+        default="cif",
+        choices=["json", "yaml", "cif"],
+        help="Output format (default: cif)",
     )
 
     # Debug/inspection options
@@ -351,7 +351,7 @@ def main():
                     b_val = lattice.get("b", "N/A")
                     c_val = lattice.get("c", "N/A")
                     print(f"  Lattice: a={a_val:.3f}, b={b_val:.3f}, c={c_val:.3f}")
-                print()
+                print(f"  Wyckoff positions: {structure.get('wyckoff_positions', [])}")
 
             if len(structures) > 3:
                 print(f"... and {len(structures) - 3} more structures")

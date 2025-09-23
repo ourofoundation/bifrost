@@ -14,6 +14,10 @@ python bifrost/data/mp/generate_mp_dataset.py --api_key FsSFsoEfqi6J37fuRe8McMTi
 bifrost-train --model-size small --epochs 10 --batch-size 64 --dataset bifrost/data/mp/mp_dataset.json --tensorboard
 ```
 
+```bash
+bifrost-train --model-size base --epochs 10 --batch-size 64 --dataset bifrost/data/mp/mp_dataset.json --tensorboard
+```
+
 ### Generation
 
 ```bash

@@ -242,6 +242,12 @@ class BIFROST(nn.Module):
         generated_tokens = prefix_tokens.clone().float()
         generated_types = prefix_types.clone()
 
+        # Track which sequences have finished (hit EOS)
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        # Lattice decoding constraint state: once lattice begins, require 6 values
+        lattice_started = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        lattice_count = torch.zeros(batch_size, dtype=torch.long, device=device)
+
         # Generate tokens one by one
         for _ in range(max_length - prefix_tokens.size(1)):
 
@@ -269,6 +275,44 @@ class BIFROST(nn.Module):
                 top_p,
             )
 
+            # Enforce lattice constraint: once lattice starts, emit exactly 6 continuous values
+            if (~finished).any():
+                # Sequences that already in lattice but not yet 6 values and did NOT predict lattice now
+                need_more_lattice = (
+                    lattice_started & (lattice_count < 6) & (predicted_types != 6)
+                )
+                if need_more_lattice.any():
+                    # Sample continuous for these sequences from current params
+                    mean, log_var = continuous_params[:, -1].split(1, dim=-1)
+                    log_var = torch.clamp(log_var, min=-10.0, max=10.0)
+                    std = torch.exp(0.5 * log_var)
+                    std = torch.clamp(std, min=1e-6)
+                    epsilon = torch.randn_like(mean)
+                    forced_samples = (mean + temperature * std * epsilon).squeeze(-1)
+                    # Override next_token and predicted_types where needed
+                    next_token = next_token.clone()
+                    next_token[need_more_lattice] = forced_samples[need_more_lattice]
+                    predicted_types = predicted_types.clone()
+                    predicted_types[need_more_lattice] = 6  # LATTICE
+
+                # If model predicts lattice for the first time, mark start
+                newly_started = (~lattice_started) & (predicted_types == 6)
+                if newly_started.any():
+                    lattice_started = lattice_started | newly_started
+
+                # Increment lattice count for positions where we are in lattice and predicted lattice
+                inc_mask = lattice_started & (predicted_types == 6)
+                if inc_mask.any():
+                    lattice_count = lattice_count + inc_mask.long()
+
+            # Force EOS for sequences that already finished
+            if finished.any():
+                next_token = next_token.clone()
+                next_token[finished] = float(eos_token_id)
+                # Ensure token type is discrete for finished sequences
+                predicted_types = predicted_types.clone()
+                predicted_types[finished] = 0  # PROPERTY (discrete)
+
             # Append to generated sequence
             generated_tokens = torch.cat(
                 [generated_tokens, next_token.unsqueeze(1)], dim=1
@@ -277,8 +321,10 @@ class BIFROST(nn.Module):
                 [generated_types, predicted_types.unsqueeze(1)], dim=1
             )
 
-            # Check for EOS token
-            if (next_token == eos_token_id).all():
+            # Update finished mask for sequences that just produced EOS
+            finished = finished | (next_token == float(eos_token_id))
+            # Stop when all sequences have finished
+            if finished.all():
                 break
 
         return generated_tokens, generated_types

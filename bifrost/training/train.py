@@ -89,7 +89,6 @@ class TrainingStats:
             "epoch": self.epoch,
             "avg_loss": sum(self.loss_history) / len(self.loss_history),
             "min_loss": min(self.loss_history),
-            "max_loss": max(self.loss_history),
             "avg_lr": sum(self.lr_history) / len(self.lr_history),
             "component_avgs": {
                 key: sum(values) / len(values) if values else 0.0
@@ -114,7 +113,6 @@ class TrainingStats:
             summary["overall_stats"] = {
                 "avg_loss": sum(self.loss_history) / len(self.loss_history),
                 "min_loss": min(self.loss_history),
-                "max_loss": max(self.loss_history),
                 "final_loss": self.loss_history[-1],
             }
 
@@ -163,7 +161,7 @@ class BIFROSTTrainer:
         # Configure loss weights if provided
         w_disc = self.config.get("w_disc", 1.0)
         w_cont = self.config.get("w_cont", 1.0)
-        w_type = self.config.get("w_type", 0.2)
+        w_type = self.config.get("w_type", 0.5)
         try:
             self.model.heads.set_loss_weights(
                 w_disc=w_disc, w_cont=w_cont, w_type=w_type
@@ -287,7 +285,8 @@ class BIFROSTTrainer:
         self.optimizer.zero_grad()
 
         # Forward pass with mixed precision
-        with torch.amp.autocast("cuda", enabled=self.gradient_scaler.enabled):
+        device_type = "cuda" if self.device.type == "cuda" else "cpu"
+        with torch.amp.autocast(device_type, enabled=self.gradient_scaler.enabled):
             loss, loss_components = self.model.compute_loss(
                 batch["input_tokens"],
                 batch["target_tokens"],
@@ -385,9 +384,6 @@ class BIFROSTTrainer:
                 "epoch/min_loss", epoch_summary.get("min_loss", 0.0), epoch_index
             )
             self.tb_writer.add_scalar(
-                "epoch/max_loss", epoch_summary.get("max_loss", 0.0), epoch_index
-            )
-            self.tb_writer.add_scalar(
                 "epoch/avg_lr", epoch_summary.get("avg_lr", 0.0), epoch_index
             )
             component_avgs = epoch_summary.get("component_avgs", {})
@@ -419,7 +415,10 @@ class BIFROSTTrainer:
                 }
 
                 # Forward pass
-                with torch.amp.autocast("cuda", enabled=self.gradient_scaler.enabled):
+                device_type = "cuda" if self.device.type == "cuda" else "cpu"
+                with torch.amp.autocast(
+                    device_type, enabled=self.gradient_scaler.enabled
+                ):
                     loss, _ = self.model.compute_loss(
                         batch["input_tokens"],
                         batch["target_tokens"],
