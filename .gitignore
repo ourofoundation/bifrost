@@ -213,3 +213,4 @@ runs/
 
 mp_dataset_large.json
 *.cif
+*.DS_Store

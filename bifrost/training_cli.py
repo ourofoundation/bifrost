@@ -327,16 +327,38 @@ def main():
     base_train_cfg = create_training_config("default")
     train_cfg = _merge_training_overrides(base_train_cfg, args)
 
-    # Derive total steps for scheduler
+    # Derive total steps for scheduler (resume-aware)
     steps_per_epoch = max(1, len(train_loader))
-    train_cfg["total_steps"] = steps_per_epoch * max(1, args.epochs)
+
+    start_epoch_from_ckpt = 0
+    if args.resume:
+        try:
+            # Read checkpoint metadata without constructing the trainer yet
+            ckpt = torch.load(args.resume, map_location="cpu")
+            # Checkpoints in this project save one-based epoch indices
+            start_epoch_from_ckpt = int(ckpt.get("epoch", 0))
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Failed to read checkpoint metadata from {args.resume}: {e}"
+            )
+
+    planned_total_epochs = max(1, args.epochs + start_epoch_from_ckpt)
+    planned_total_steps = steps_per_epoch * planned_total_epochs
+    train_cfg["total_steps"] = planned_total_steps
+
+    # Smart default for warmup steps if not explicitly provided
+    if train_cfg.get("warmup_steps") is None:
+        # Use 5% of total steps with a reasonable cap
+        dynamic_warmup = max(1, min(int(planned_total_steps * 0.05), 10000))
+        train_cfg["warmup_steps"] = dynamic_warmup
 
     logger.info(f"Training config: {train_cfg}")
 
     # Trainer
     trainer = create_trainer(model, train_loader, val_loader, train_cfg)
 
-    # Optionally resume
+    # Optionally resume (after trainer is constructed with resume-aware scheduler)
     if args.resume:
         try:
             last_epoch = trainer.load_checkpoint(args.resume)
